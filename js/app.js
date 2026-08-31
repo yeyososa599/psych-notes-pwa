@@ -299,9 +299,17 @@ recordStartBtn.addEventListener('click', async () => {
       return;
     }
     if (isTranscriptionSupported()) {
-      liveTranscription = startLiveTranscription((text) => {
-        state.pending.transcript = text;
-      });
+      liveTranscription = startLiveTranscription(
+        (text) => { state.pending.transcript = text; },
+        () => {
+          // Spraakherkenning blijft falen (bijv. geen internet, of — een
+          // bekende beperking — de app geopend als geïnstalleerde
+          // snelkoppeling i.p.v. een gewoon browsertabblad). De opname zelf
+          // loopt gewoon door; alleen automatisch transcriberen stopt.
+          recordHintEl.textContent = 'Automatisch transcriberen lukt hier niet — spreek gewoon verder, ' +
+            'je kunt de tekst straks zelf intypen. (Werkt het wel in een gewoon browsertabblad? Open de app dan zo.)';
+        }
+      );
     } else {
       liveTranscription = null;
     }

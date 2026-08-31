@@ -26,11 +26,21 @@ export function isTranscriptionSupported() {
   return !!SpeechRecognitionImpl;
 }
 
+const MAX_CONSECUTIVE_ERRORS = 3;
+const RESTART_DELAY_MS = 300;
+
 /**
  * Start live transcriptie. Geeft een controller terug met stop().
  * @param {(text:string, isFinal:boolean)=>void} onUpdate
+ * @param {(reason:string)=>void} [onFatalError] — aangeroepen als spraakherkenning
+ *   herhaaldelijk faalt en de app stopt met opnieuw proberen (bijv. geen
+ *   internetverbinding, of — een bekende beperking van sommige browsers —
+ *   wanneer de app als geïnstalleerde snelkoppeling/PWA is geopend in
+ *   plaats van in een gewoon browsertabblad). De opname zelf loopt gewoon
+ *   door; alleen automatische transcriptie stopt, de psycholoog kan de
+ *   tekst dan na het opnemen zelf intypen.
  */
-export function startLiveTranscription(onUpdate) {
+export function startLiveTranscription(onUpdate, onFatalError) {
   if (!SpeechRecognitionImpl) return null;
 
   const recognition = new SpeechRecognitionImpl();
@@ -39,8 +49,12 @@ export function startLiveTranscription(onUpdate) {
   recognition.interimResults = true;
 
   let finalText = '';
+  let shouldRestart = true;
+  let consecutiveErrors = 0;
+  let lastErrorReason = '';
 
   recognition.addEventListener('result', (event) => {
+    consecutiveErrors = 0; // een geslaagd resultaat bewijst dat herkenning weer werkt
     let interim = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const result = event.results[i];
@@ -53,17 +67,32 @@ export function startLiveTranscription(onUpdate) {
     onUpdate((finalText + interim).trim(), false);
   });
 
-  // Sommige browsers stoppen 'onend' vanzelf na stiltes; herstart dan
-  // automatisch zolang de opname nog loopt (wordt gestopt via stop()).
-  let shouldRestart = true;
-  recognition.addEventListener('end', () => {
-    if (shouldRestart) {
-      try { recognition.start(); } catch { /* al bezig, negeren */ }
-    }
-  });
   recognition.addEventListener('error', (e) => {
+    // "no-speech" is normaal (gewoon een stilte) en telt niet als storing.
     if (e.error === 'no-speech' || e.error === 'aborted') return;
+    consecutiveErrors++;
+    lastErrorReason = e.error;
     console.warn('Spraakherkenning fout:', e.error);
+  });
+
+  // Sommige browsers stoppen 'onend' vanzelf na stiltes; herstart dan
+  // automatisch zolang de opname nog loopt. MAAR: zonder limiet kan dit
+  // bij een aanhoudende storing (bijv. geen internet, of — een bekende
+  // beperking — de app geopend als geïnstalleerde snelkoppeling i.p.v.
+  // een gewoon browsertabblad) een oneindige, razendsnelle herstart-lus
+  // worden die de pagina laat "hangen". Daarom: een korte vertraging per
+  // herstart en een harde stop na een paar mislukkingen op rij.
+  recognition.addEventListener('end', () => {
+    if (!shouldRestart) return;
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+      shouldRestart = false;
+      onFatalError?.(lastErrorReason || 'onbekende fout');
+      return;
+    }
+    setTimeout(() => {
+      if (!shouldRestart) return;
+      try { recognition.start(); } catch { /* al bezig, negeren */ }
+    }, RESTART_DELAY_MS);
   });
 
   try { recognition.start(); } catch { /* ignore */ }
