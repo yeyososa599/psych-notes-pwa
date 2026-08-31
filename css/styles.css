@@ -136,6 +136,15 @@ input[type="search"], input[type="text"], input[type="password"] {
 .btn-secondary:active { background: #ddd9d3; }
 .btn-danger { background: var(--color-danger); color: white; width: 100%; }
 .btn-text { background: transparent; color: var(--color-muted); text-decoration: underline; }
+.btn-text-danger {
+  background: transparent;
+  border: none;
+  color: var(--color-danger);
+  text-decoration: underline;
+  font-size: 0.9rem;
+  padding: 8px 0;
+  cursor: pointer;
+}
 .btn-large { width: 100%; font-size: 1.1rem; padding: 18px; }
 .form-actions { display: flex; gap: 10px; margin-top: 18px; }
 .form-actions .btn { flex: 1; }

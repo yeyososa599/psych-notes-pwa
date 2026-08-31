@@ -7,6 +7,7 @@ import * as Notes from './notes.js';
 import { createRecorder, isRecordingSupported } from './recorder.js';
 import { startLiveTranscription, isTranscriptionSupported } from './transcription.js';
 import { matchClientInTranscript } from './nameMatch.js';
+import { initAuth, lockNow, suspendAutoLock, resumeAutoLock } from './auth.js';
 import { formatDuration, formatDateTime } from './utils.js';
 
 const state = {
@@ -130,6 +131,19 @@ document.getElementById('new-note-fab').addEventListener('click', () => {
   openRecordView();
 });
 
+document.getElementById('delete-client-btn').addEventListener('click', async () => {
+  const client = state.currentClient;
+  if (!client) return;
+  const ok = window.confirm(
+    `Cliënt "${client.name}" en al hun aantekeningen definitief verwijderen? Dit kan niet ongedaan gemaakt worden.`
+  );
+  if (!ok) return;
+  await Notes.deleteAllNotesForClient(client.id);
+  await Clients.deleteClient(client.id);
+  state.currentClient = null;
+  openClientList();
+});
+
 // ---------------------------------------------------------------------
 // Opname maken
 // ---------------------------------------------------------------------
@@ -177,7 +191,7 @@ function openRecordView() {
   showView('record', {
     title: 'Nieuwe aantekening',
     onBack: () => {
-      if (isRecording) recorder?.cancel();
+      if (isRecording) { recorder?.cancel(); resumeAutoLock(); }
       liveTranscription?.stop();
       openClientDetail(state.currentClient);
     },
@@ -204,11 +218,13 @@ recordStartBtn.addEventListener('click', async () => {
       liveTranscription = null;
     }
     isRecording = true;
+    suspendAutoLock(); // een lopende opname mag nooit door auto-lock afgebroken worden
     recordStartBtn.classList.add('recording');
     recordVisualizerEl.classList.add('pulsing');
     recordStartBtn.setAttribute('aria-label', 'Stop opname');
   } else {
     isRecording = false;
+    resumeAutoLock();
     const result = await recorder.stop();
     const transcript = liveTranscription ? liveTranscription.stop() : '';
     if (transcript) state.pending.transcript = transcript;
@@ -358,8 +374,12 @@ const noteDeleteBtn = document.getElementById('note-delete-btn');
 
 let openNoteId = null;
 
-function openNoteDetail(note) {
-  openNoteId = note.id;
+async function openNoteDetail(noteSummary) {
+  openNoteId = noteSummary.id;
+  // De lijst bevat alleen het (al ontsleutelde) transcript, niet de audio —
+  // die halen en ontsleutelen we pas nu, bij het daadwerkelijk openen.
+  const note = await Notes.getNote(noteSummary.id);
+  if (!note || note.id !== openNoteId) return; // ondertussen iets anders geopend
   noteDetailDateEl.textContent = `${formatDateTime(note.createdAt)} · ${formatDuration(note.durationSec)}`;
   if (noteDetailAudioEl.src) URL.revokeObjectURL(noteDetailAudioEl.src);
   noteDetailAudioEl.src = Notes.audioBlobUrl(note);
@@ -376,11 +396,18 @@ noteDeleteBtn.addEventListener('click', async () => {
   openClientDetail(state.currentClient);
 });
 
+document.getElementById('lock-now-btn').addEventListener('click', lockNow);
+
 // ---------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------
+// De rest van de app (cliëntgegevens!) wordt pas getoond/geladen NADAT de
+// pincode (of biometrie) is bevestigd — zie auth.js. Vóór dat moment staat
+// alleen het vergrendelscherm op het scherm.
 
-openClientList();
+initAuth(() => {
+  openClientList();
+});
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

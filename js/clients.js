@@ -1,33 +1,55 @@
 // clients.js — cliëntenbeheer: CRUD + lijst-rendering.
-// Data blijft lokaal in IndexedDB (zie db.js). Vanaf Fase 3 worden
-// name/note hier versleuteld vóór opslag en ontsleuteld ná ophalen.
+// Data blijft lokaal in IndexedDB (zie db.js). name/note zijn persoons-
+// gegevens en worden vóór opslag versleuteld (crypto.js, AES-GCM met een
+// sleutel die alleen in het geheugen leeft na pincode-ontgrendeling) en
+// ná ophalen weer ontsleuteld. Op schijf (IndexedDB) staat dus nooit een
+// leesbare naam — alleen id/createdAt/updatedAt/deleted blijven plaintext.
 
 import { db } from './db.js';
+import * as Crypto from './crypto.js';
 import { uuid, formatDateTime, escapeHtml } from './utils.js';
 
 export async function addClient(name, note) {
   const now = new Date().toISOString();
-  const client = {
+  const record = {
     id: uuid(),
-    name: name.trim(),
-    note: (note || '').trim(),
+    encName: await Crypto.encryptField(name.trim()),
+    encNote: await Crypto.encryptField((note || '').trim()),
     createdAt: now,
     updatedAt: now,
     deleted: false,
   };
-  await db.put('clients', client);
-  return client;
+  await db.put('clients', record);
+  return { id: record.id, name: name.trim(), note: (note || '').trim(), createdAt: now, updatedAt: now };
+}
+
+async function decryptClientRecord(record) {
+  return {
+    id: record.id,
+    name: await Crypto.decryptField(record.encName),
+    note: await Crypto.decryptField(record.encNote),
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    deleted: record.deleted,
+  };
 }
 
 export async function getClient(id) {
-  return db.get('clients', id);
+  const record = await db.get('clients', id);
+  return record ? decryptClientRecord(record) : null;
 }
 
 export async function getAllClients() {
   const all = await db.getAll('clients');
-  return all
-    .filter(c => !c.deleted)
-    .sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+  const decrypted = await Promise.all(all.filter(c => !c.deleted).map(decryptClientRecord));
+  return decrypted.sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+}
+
+// Harde verwijdering: cliënt + al hun aantekeningen (audio + transcript)
+// worden echt uit IndexedDB gewist. Het cascaderen naar notes.js gebeurt
+// in app.js, zodat clients.js niet van notes.js hoeft af te hangen.
+export async function deleteClient(id) {
+  return db.delete('clients', id);
 }
 
 /** Render de cliëntenlijst in <ul id="client-list">, gefilterd op zoekterm. */

@@ -1,31 +1,52 @@
 // notes.js — aantekeningen: CRUD + lijst/detail-rendering.
 // Een note wordt UITSLUITEND aangemaakt ná de verplichte controlestap in
 // app.js (view-confirm) — deze module bevat zelf geen koppel-logica.
-// Data blijft lokaal in IndexedDB (zie db.js). Vanaf Fase 3 worden
-// transcript/audioBlob hier versleuteld vóór opslag.
+//
+// Data blijft lokaal in IndexedDB (zie db.js). transcript en audioBlob
+// zijn persoonsgegevens en worden vóór opslag versleuteld (crypto.js).
+// Voor de lijstweergave (getNotesForClient) ontsleutelen we alleen het
+// transcript, NIET de audio — dat zou onnodig traag zijn voor een lijst.
+// De audio wordt pas ontsleuteld bij het daadwerkelijk openen/afspelen
+// van één aantekening (getNote).
 
 import { db } from './db.js';
+import * as Crypto from './crypto.js';
 import { uuid, formatDateTime, formatDuration, escapeHtml } from './utils.js';
 
 export async function addNote({ clientId, transcript, audioBlob, mimeType, durationSec }) {
   const now = new Date().toISOString();
-  const note = {
+  const record = {
     id: uuid(),
     clientId,
-    transcript: transcript || '',
-    audioBlob,
-    mimeType,
+    encTranscript: await Crypto.encryptField(transcript || ''),
+    encAudio: await Crypto.encryptBlob(audioBlob),
     durationSec: durationSec || 0,
     createdAt: now,
     updatedAt: now,
     deleted: false,
   };
-  await db.put('notes', note);
-  return note;
+  await db.put('notes', record);
+  return { id: record.id, clientId, transcript: transcript || '', mimeType, durationSec: record.durationSec, createdAt: now };
 }
 
+/** Volledige, ontsleutelde note inclusief afspeelbare audio-Blob. */
 export async function getNote(id) {
-  return db.get('notes', id);
+  const record = await db.get('notes', id);
+  if (!record) return null;
+  const [transcript, audioBlob] = await Promise.all([
+    Crypto.decryptField(record.encTranscript),
+    Crypto.decryptBlob(record.encAudio),
+  ]);
+  return {
+    id: record.id,
+    clientId: record.clientId,
+    transcript,
+    audioBlob,
+    mimeType: record.encAudio.mimeType,
+    durationSec: record.durationSec,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
 }
 
 export async function deleteNote(id) {
@@ -35,11 +56,24 @@ export async function deleteNote(id) {
   return db.delete('notes', id);
 }
 
+/** Verwijdert alle aantekeningen van een cliënt (bijv. als de cliënt zelf verwijderd wordt). */
+export async function deleteAllNotesForClient(clientId) {
+  const all = await db.getAllByIndex('notes', 'clientId', clientId);
+  await Promise.all(all.map(n => db.delete('notes', n.id)));
+}
+
+/** Lijst-weergave: ontsleutelt alléén het transcript (snel, geen audio). */
 export async function getNotesForClient(clientId) {
   const all = await db.getAllByIndex('notes', 'clientId', clientId);
-  return all
-    .filter(n => !n.deleted)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const active = all.filter(n => !n.deleted).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return Promise.all(active.map(async (record) => ({
+    id: record.id,
+    clientId: record.clientId,
+    transcript: await Crypto.decryptField(record.encTranscript),
+    durationSec: record.durationSec,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  })));
 }
 
 export function renderNotesList(listEl, emptyEl, notes, onSelect) {

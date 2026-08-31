@@ -21,7 +21,7 @@
 <div id="app">
 
   <!-- ---------- Vergrendelscherm (Fase 3) ---------- -->
-  <section id="view-lock" class="view">
+  <section id="view-lock" class="view active">
     <div class="lock-box">
       <h1>🔒 Praktijknotities</h1>
       <p class="muted">Voer je pincode in om verder te gaan.</p>
@@ -46,7 +46,7 @@
   <main id="main">
 
     <!-- ---------- Cliëntenlijst ---------- -->
-    <section id="view-clients" class="view active">
+    <section id="view-clients" class="view">
       <div class="list-toolbar">
         <input id="client-search" type="search" placeholder="Zoek cliënt…" aria-label="Zoek cliënt">
       </div>
@@ -75,6 +75,7 @@
     <section id="view-client-detail" class="view">
       <div class="client-detail-meta">
         <p id="client-detail-note" class="muted"></p>
+        <button id="delete-client-btn" class="btn-text-danger">Cliënt verwijderen…</button>
       </div>
       <ul id="notes-list" class="item-list"></ul>
       <p id="notes-list-empty" class="empty-state" hidden>Nog geen aantekeningen voor deze cliënt.</p>
