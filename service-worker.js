@@ -6,7 +6,9 @@
 // Dat betekent: opnames inspreken werkt volledig offline; alleen het
 // synchroniseren tussen apparaten (sync.js, Fase 4) vereist internet.
 
-const CACHE_NAME = 'praktijknotities-shell-v1';
+// Ophogen bij elke deploy die de app-shell wijzigt: dat laat de browser
+// de oude cache herkennen als verouderd en 'm opruimen in activate().
+const CACHE_NAME = 'praktijknotities-shell-v2';
 
 const SHELL_FILES = [
   './',
@@ -51,18 +53,21 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return; // nooit externe requests cachen/afvangen
 
+  // NETWORK-FIRST: bij internet altijd de nieuwste versie ophalen (en de
+  // cache bijwerken) zodat een update van de app niet "vastzit" achter een
+  // oude cache — pas als het netwerk faalt (= offline), terugvallen op de
+  // laatst gecachte versie. Dat is precies wat "werkt ook offline" vereist
+  // zonder de app te laten vastlopen op verouderde bestanden zodra er wél
+  // weer verbinding is.
   event.respondWith(
-    caches.match(request).then(cached => {
-      if (cached) return cached;
-      return fetch(request)
-        .then(resp => {
-          if (resp.ok) {
-            const clone = resp.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
-          }
-          return resp;
-        })
-        .catch(() => cached);
-    })
+    fetch(request)
+      .then(resp => {
+        if (resp.ok) {
+          const clone = resp.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+        }
+        return resp;
+      })
+      .catch(() => caches.match(request))
   );
 });
