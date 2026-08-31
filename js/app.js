@@ -8,6 +8,7 @@ import { createRecorder, isRecordingSupported } from './recorder.js';
 import { startLiveTranscription, isTranscriptionSupported } from './transcription.js';
 import { matchClientInTranscript } from './nameMatch.js';
 import { initAuth, lockNow, suspendAutoLock, resumeAutoLock } from './auth.js';
+import * as Sync from './sync.js';
 import { formatDuration, formatDateTime } from './utils.js';
 
 const state = {
@@ -36,6 +37,7 @@ const els = {
     transcript: document.getElementById('view-transcript'),
     confirm: document.getElementById('view-confirm'),
     noteDetail: document.getElementById('view-note-detail'),
+    sync: document.getElementById('view-sync'),
   },
 };
 
@@ -399,6 +401,106 @@ noteDeleteBtn.addEventListener('click', async () => {
 document.getElementById('lock-now-btn').addEventListener('click', lockNow);
 
 // ---------------------------------------------------------------------
+// Synchronisatie-instellingen
+// ---------------------------------------------------------------------
+
+const syncIndicatorBtn = document.getElementById('sync-indicator-btn');
+const syncStatusEl = document.getElementById('sync-status');
+const syncConfiguredActionsEl = document.getElementById('sync-configured-actions');
+const syncSetupFormEl = document.getElementById('sync-setup-form');
+const syncLastResultEl = document.getElementById('sync-last-result');
+const syncSetupErrorEl = document.getElementById('sync-setup-error');
+
+function setSyncIndicator(state) {
+  // state: 'off' | 'idle' | 'syncing' | 'offline'
+  syncIndicatorBtn.classList.remove('syncing', 'offline', 'synced');
+  if (state === 'syncing') syncIndicatorBtn.classList.add('syncing');
+  else if (state === 'offline') syncIndicatorBtn.classList.add('offline');
+  else if (state === 'idle') syncIndicatorBtn.classList.add('synced');
+  syncIndicatorBtn.title = {
+    off: 'Sync niet ingesteld', idle: 'Gesynchroniseerd', syncing: 'Bezig met synchroniseren…', offline: 'Sync mislukt / offline',
+  }[state] || 'Synchronisatie-instellingen';
+}
+
+async function refreshSyncView() {
+  const account = await Sync.getAccountState();
+  syncSetupErrorEl.textContent = '';
+  if (account) {
+    syncStatusEl.textContent = `Ingelogd als ${account.email} op ${account.serverUrl}.` +
+      (account.lastSyncAt ? ` Laatst gesynchroniseerd: ${formatDateTime(account.lastSyncAt)}.` : ' Nog niet gesynchroniseerd.');
+    syncConfiguredActionsEl.hidden = false;
+    syncSetupFormEl.hidden = true;
+    setSyncIndicator('idle');
+  } else {
+    syncStatusEl.textContent = 'Synchronisatie is nog niet ingesteld. Dit apparaat werkt gewoon lokaal door.';
+    syncConfiguredActionsEl.hidden = true;
+    syncSetupFormEl.hidden = false;
+    setSyncIndicator('off');
+  }
+}
+
+function openSyncView() {
+  showView('sync', { title: 'Synchronisatie', onBack: () => openClientList() });
+  refreshSyncView();
+}
+
+syncIndicatorBtn.addEventListener('click', openSyncView);
+
+document.getElementById('sync-setup-register-btn').addEventListener('click', async () => {
+  const serverUrl = document.getElementById('sync-setup-server').value.trim();
+  const email = document.getElementById('sync-setup-email').value.trim();
+  const password = document.getElementById('sync-setup-password').value;
+  syncSetupErrorEl.textContent = '';
+  if (!serverUrl || !email || !password) {
+    syncSetupErrorEl.textContent = 'Vul server, e-mail en wachtwoord in.';
+    return;
+  }
+  try {
+    await Sync.registerAccount(serverUrl, email, password);
+    await trySync();
+    await refreshSyncView();
+  } catch (err) {
+    console.warn('Sync-registratie mislukt:', err);
+    syncSetupErrorEl.textContent = err.message || 'Account aanmaken mislukt.';
+  }
+});
+
+document.getElementById('sync-now-btn').addEventListener('click', async () => {
+  await trySync();
+  await refreshSyncView();
+});
+
+document.getElementById('sync-signout-btn').addEventListener('click', async () => {
+  const ok = window.confirm(
+    'Uitloggen op dit apparaat? De lokale cliëntgegevens blijven gewoon staan; alleen het automatisch synchroniseren stopt.'
+  );
+  if (!ok) return;
+  await Sync.signOut();
+  await refreshSyncView();
+});
+
+async function trySync() {
+  if (!(await Sync.isEnabled())) return;
+  setSyncIndicator('syncing');
+  try {
+    const result = await Sync.syncNow();
+    syncLastResultEl.textContent = `Laatste sync: ${result.pushed} verstuurd, ${result.pulled} ontvangen.`;
+    setSyncIndicator('idle');
+    // Lokale wijzigingen die net zijn binnengehaald (bijv. van het andere
+    // apparaat) direct zichtbaar maken in het huidige scherm.
+    if (els.views.clients.classList.contains('active')) refreshClients();
+    if (els.views.clientDetail.classList.contains('active')) refreshNotes();
+  } catch (err) {
+    console.warn('Synchroniseren mislukt:', err);
+    syncLastResultEl.textContent = `Synchroniseren mislukt: ${err.message || err}`;
+    setSyncIndicator('offline');
+  }
+}
+
+window.addEventListener('online', () => { trySync(); });
+setInterval(() => { trySync(); }, 5 * 60 * 1000); // elke 5 minuten een stille poging, geen effect als sync niet is ingesteld of er geen internet is
+
+// ---------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------
 // De rest van de app (cliëntgegevens!) wordt pas getoond/geladen NADAT de
@@ -407,6 +509,8 @@ document.getElementById('lock-now-btn').addEventListener('click', lockNow);
 
 initAuth(() => {
   openClientList();
+  Sync.isEnabled().then(enabled => setSyncIndicator(enabled ? 'idle' : 'off'));
+  trySync();
 });
 
 if ('serviceWorker' in navigator) {

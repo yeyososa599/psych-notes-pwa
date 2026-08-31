@@ -1,0 +1,15 @@
+{
+  "name": "praktijknotities-sync-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Referentie-implementatie van de zero-knowledge sync-server voor Praktijknotities. Slaat uitsluitend versleutelde blobs op — zie server.js voor uitleg.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2"
+  }
+}

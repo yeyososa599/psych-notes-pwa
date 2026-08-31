@@ -121,6 +121,67 @@ export async function changePin(oldPin, newPin) {
   return true;
 }
 
+/**
+ * Stelt een lokale pincode in voor de HUIDIGE (al ontgrendelde) DEK, zonder
+ * een nieuwe DEK te genereren. Nodig wanneer een tweede apparaat via
+ * sync.js inlogt op een bestaand account: dat apparaat moet dezelfde DEK
+ * gebruiken als het eerste apparaat (anders kan het diens versleutelde
+ * data nooit lezen), maar krijgt wél zijn eigen lokale pincode voor snel
+ * dagelijks ontgrendelen.
+ */
+export async function setupPinForExistingDek(pin) {
+  requireUnlocked();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iterations = PBKDF2_ITERATIONS;
+  const kek = await deriveKek(pin, salt, iterations);
+  const wrapped = await wrapDek(dek, kek);
+  await db.put('meta', { key: 'auth', value: { salt, iterations, wrapped } });
+}
+
+// --------------------------------------------------------------------
+// Sleuteldeling tussen apparaten (gebruikt door sync.js — Fase 4)
+//
+// De DEK verlaat dit apparaat NOOIT in leesbare vorm. Om de DEK toch
+// veilig te delen tussen de telefoon en de computer van dezelfde
+// psycholoog, wordt een TWEEDE, aparte gewrapte kopie gemaakt — ditmaal
+// met een sleutel afgeleid van het sync-accountwachtwoord (los van de
+// lokale pincode). Alleen deze gewrapte kopie (onleesbare ciphertext)
+// wordt via de server gedeeld; zie sync.js voor het registratie/login-
+// protocol en server/server.js voor wat de server daadwerkelijk opslaat
+// (nooit het wachtwoord, nooit de sleutel zelf).
+// --------------------------------------------------------------------
+
+/** Wrapt de huidige (ontgrendelde) DEK met een van het sync-wachtwoord afgeleide sleutel. */
+export async function wrapDekWithPassword(password, salt, iterations) {
+  requireUnlocked();
+  const kek = await deriveKek(password, salt, iterations);
+  return wrapDek(dek, kek);
+}
+
+/** Ontgrendelt (zet de actieve DEK) met een gewrapte kopie + het sync-wachtwoord. Gooit een fout bij een onjuist wachtwoord. */
+export async function unwrapDekWithPassword(wrapped, password, salt, iterations) {
+  const kek = await deriveKek(password, salt, iterations);
+  dek = await unwrapDek(wrapped, kek); // gooit bij verkeerd wachtwoord (AES-GCM auth-tag mismatch)
+}
+
+/**
+ * Leidt een "inlogbewijs" af van het sync-wachtwoord — dit is NIET het
+ * wachtwoord zelf en NIET de KEK die de DEK wrapt, maar een derde,
+ * cryptografisch onafhankelijke afleiding (andere PBKDF2-context) die wél
+ * naar de server mag om in te loggen. De server slaat hier op zijn beurt
+ * weer een bcrypt-hash van op — het wachtwoord zelf komt dus nooit ergens
+ * in leesbare vorm terecht, ook niet tijdens transport.
+ */
+export async function deriveLoginProof(password, salt, iterations) {
+  const baseKey = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode('login:' + password), 'PBKDF2', false, ['deriveBits']
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, baseKey, 256
+  );
+  return new Uint8Array(bits);
+}
+
 // --------------------------------------------------------------------
 // Veld- en Blob-encryptie (gebruikt de ontgrendelde DEK uit het geheugen)
 // --------------------------------------------------------------------

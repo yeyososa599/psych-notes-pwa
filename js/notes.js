@@ -50,16 +50,45 @@ export async function getNote(id) {
 }
 
 export async function deleteNote(id) {
-  // Harde verwijdering: de audio-Blob en tekst worden echt uit IndexedDB
-  // gewist, niet alleen gemarkeerd — bijzondere persoonsgegevens blijven
-  // zo niet onnodig lokaal staan. (Sync-verwijdering: zie sync.js Fase 4.)
-  return db.delete('notes', id);
+  // We wissen audio + transcript écht (het record wordt overschreven
+  // zónder encTranscript/encAudio) — er blijft alleen een klein
+  // "tombstone"-markertje over. Dat is nodig zodat de verwijdering ook
+  // naar het andere apparaat kan synchroniseren (sync.js, Fase 4): zonder
+  // marker zou de aantekening op het andere apparaat blijven staan.
+  const existing = await db.get('notes', id);
+  if (!existing) return;
+  await db.put('notes', {
+    id,
+    clientId: existing.clientId,
+    deleted: true,
+    createdAt: existing.createdAt,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 /** Verwijdert alle aantekeningen van een cliënt (bijv. als de cliënt zelf verwijderd wordt). */
 export async function deleteAllNotesForClient(clientId) {
   const all = await db.getAllByIndex('notes', 'clientId', clientId);
-  await Promise.all(all.map(n => db.delete('notes', n.id)));
+  await Promise.all(all.filter(n => !n.deleted).map(n => deleteNote(n.id)));
+}
+
+// --------------------------------------------------------------------
+// Rauwe (nog versleutelde) toegang — uitsluitend voor sync.js (zie de
+// toelichting bovenaan clients.js: sync.js ontsleutelt nooit iets).
+// --------------------------------------------------------------------
+
+export async function getAllNotesRaw() {
+  return db.getAll('notes');
+}
+
+/** Schrijft binnengehaalde (al versleutelde) records weg met last-write-wins op updatedAt. */
+export async function putRawNoteRecords(records) {
+  for (const incoming of records) {
+    const local = await db.get('notes', incoming.id);
+    if (!local || incoming.updatedAt > local.updatedAt) {
+      await db.put('notes', incoming);
+    }
+  }
 }
 
 /** Lijst-weergave: ontsleutelt alléén het transcript (snel, geen audio). */

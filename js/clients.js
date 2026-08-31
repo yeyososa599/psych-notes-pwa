@@ -45,11 +45,43 @@ export async function getAllClients() {
   return decrypted.sort((a, b) => a.name.localeCompare(b.name, 'nl'));
 }
 
-// Harde verwijdering: cliënt + al hun aantekeningen (audio + transcript)
-// worden echt uit IndexedDB gewist. Het cascaderen naar notes.js gebeurt
-// in app.js, zodat clients.js niet van notes.js hoeft af te hangen.
+// We wissen name/note écht (het record wordt overschreven zónder de
+// encName/encNote-velden) — er blijft alleen een klein "tombstone"-
+// markertje over (id + deleted:true + updatedAt). Dat merkertje is nodig
+// zodat de verwijdering ook naar het andere apparaat kan synchroniseren
+// (sync.js, Fase 4): zonder marker zou de server nooit weten dát er iets
+// verwijderd is en zou de cliënt op het andere apparaat blijven staan.
+// Het cascaderen naar notes.js gebeurt in app.js.
 export async function deleteClient(id) {
-  return db.delete('clients', id);
+  const existing = await db.get('clients', id);
+  if (!existing) return;
+  await db.put('clients', {
+    id,
+    deleted: true,
+    createdAt: existing.createdAt,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+// --------------------------------------------------------------------
+// Rauwe (nog versleutelde) toegang — uitsluitend voor sync.js. Deze
+// functies ontsleutelen NIETS: sync.js verplaatst alleen ciphertext en
+// weet niet wat erin staat (zero-knowledge blijft zo ook binnen de app-
+// architectuur gehandhaafd, niet alleen richting de server).
+// --------------------------------------------------------------------
+
+export async function getAllClientsRaw() {
+  return db.getAll('clients');
+}
+
+/** Schrijft binnengehaalde (al versleutelde) records weg met last-write-wins op updatedAt. */
+export async function putRawClientRecords(records) {
+  for (const incoming of records) {
+    const local = await db.get('clients', incoming.id);
+    if (!local || incoming.updatedAt > local.updatedAt) {
+      await db.put('clients', incoming);
+    }
+  }
 }
 
 /** Render de cliëntenlijst in <ul id="client-list">, gefilterd op zoekterm. */

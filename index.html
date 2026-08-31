@@ -22,7 +22,7 @@
 
   <!-- ---------- Vergrendelscherm (Fase 3) ---------- -->
   <section id="view-lock" class="view active">
-    <div class="lock-box">
+    <div id="lock-pin-box" class="lock-box">
       <h1>🔒 Praktijknotities</h1>
       <p class="muted">Voer je pincode in om verder te gaan.</p>
       <div id="lock-dots" class="lock-dots"></div>
@@ -30,6 +30,24 @@
       <button id="lock-biometric-btn" class="btn btn-secondary" hidden>Ontgrendel met Face ID / vingerafdruk</button>
       <p id="lock-error" class="error-text" role="alert"></p>
       <p id="lock-setup-hint" class="muted small"></p>
+      <button id="lock-show-sync-login" class="btn-text" hidden>Al een account op een ander apparaat?</button>
+    </div>
+
+    <!-- Alternatieve sub-stap van het vergrendelscherm: inloggen op een
+         bestaand sync-account vanaf een NIEUW (tweede) apparaat, vóórdat
+         er lokaal een pincode bestaat. Zie auth.js / sync.js. -->
+    <div id="lock-sync-login" class="lock-box" hidden>
+      <h1>Inloggen op bestaand account</h1>
+      <p class="muted small">Voor een tweede apparaat dat al eerder is ingesteld.</p>
+      <input id="sync-login-server" type="text" placeholder="Server-URL (bijv. https://...)" autocomplete="off">
+      <input id="sync-login-email" type="email" placeholder="E-mailadres" autocomplete="username">
+      <input id="sync-login-password" type="password" placeholder="Wachtwoord" autocomplete="current-password">
+      <input id="sync-login-pin" type="text" inputmode="numeric" maxlength="6" placeholder="Nieuwe lokale pincode (6 cijfers)" autocomplete="off">
+      <div class="form-actions">
+        <button id="sync-login-cancel" class="btn btn-secondary" type="button">Annuleren</button>
+        <button id="sync-login-submit" class="btn btn-primary" type="button">Inloggen</button>
+      </div>
+      <p id="sync-login-error" class="error-text" role="alert"></p>
     </div>
   </section>
 
@@ -38,7 +56,7 @@
     <button id="back-btn" class="icon-btn" hidden aria-label="Terug">←</button>
     <h1 id="header-title">Cliënten</h1>
     <div class="header-actions">
-      <span id="sync-indicator" class="sync-indicator" title="Synchronisatiestatus">⏺</span>
+      <button id="sync-indicator-btn" class="icon-btn sync-indicator" aria-label="Synchronisatie-instellingen" title="Synchronisatie-instellingen">⏺</button>
       <button id="lock-now-btn" class="icon-btn" aria-label="Vergrendel nu">🔒</button>
     </div>
   </header>
@@ -133,6 +151,31 @@
 
         <button id="confirm-cancel-btn" class="btn btn-text">Annuleren (niets opslaan)</button>
       </div>
+    </section>
+
+    <!-- ---------- Synchronisatie-instellingen ---------- -->
+    <section id="view-sync" class="view">
+      <p id="sync-status" class="muted"></p>
+
+      <div id="sync-configured-actions" hidden>
+        <button id="sync-now-btn" class="btn btn-primary btn-large">Nu synchroniseren</button>
+        <p id="sync-last-result" class="muted small"></p>
+        <button id="sync-signout-btn" class="btn-text-danger">Uitloggen op dit apparaat</button>
+      </div>
+
+      <form id="sync-setup-form" class="form-card">
+        <label for="sync-setup-server">Server-URL</label>
+        <input id="sync-setup-server" type="text" placeholder="https://jouw-sync-server.nl" autocomplete="off">
+        <label for="sync-setup-email">E-mailadres</label>
+        <input id="sync-setup-email" type="email" autocomplete="username">
+        <label for="sync-setup-password">Wachtwoord</label>
+        <input id="sync-setup-password" type="password" autocomplete="new-password">
+        <div class="form-actions">
+          <button id="sync-setup-register-btn" class="btn btn-primary" type="button">Nieuw account aanmaken</button>
+        </div>
+        <p class="muted small">Dit apparaat wordt dan het eerste apparaat van dit account. Log op een tweede apparaat in via het vergrendelscherm ("Al een account op een ander apparaat?").</p>
+        <p id="sync-setup-error" class="error-text" role="alert"></p>
+      </form>
     </section>
 
     <!-- ---------- Aantekening bekijken ---------- -->

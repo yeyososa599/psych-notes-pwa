@@ -94,7 +94,7 @@ body {
 
 /* ---------- Lists ---------- */
 .list-toolbar { margin-bottom: 12px; }
-input[type="search"], input[type="text"], input[type="password"] {
+input[type="search"], input[type="text"], input[type="password"], input[type="email"] {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid var(--color-border);
@@ -280,3 +280,8 @@ input[type="search"], input[type="text"], input[type="password"] {
 .keypad button:active { background: rgba(255,255,255,0.25); }
 #view-lock .error-text { color: #ffb4a0; min-height: 1.4em; }
 #view-lock .btn-secondary { margin-top: 16px; }
+#view-lock .lock-box input { margin-bottom: 10px; }
+#view-lock #lock-show-sync-login { color: rgba(255,255,255,0.8); margin-top: 20px; }
+#lock-sync-login { max-width: 340px; width: 100%; text-align: left; }
+#lock-sync-login h1 { text-align: center; font-size: 1.3rem; }
+#lock-sync-login .muted.small { text-align: center; margin-bottom: 18px; }

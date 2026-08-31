@@ -9,6 +9,7 @@
 // ==========================================================================
 
 import * as Crypto from './crypto.js';
+import * as Sync from './sync.js';
 
 const PIN_LENGTH = 6;
 const AUTO_LOCK_MS = 5 * 60 * 1000; // 5 minuten inactiviteit → vergrendelen
@@ -16,11 +17,21 @@ const ACTIVITY_CHECK_MS = 15 * 1000;
 
 const els = {
   view: document.getElementById('view-lock'),
+  pinBox: document.getElementById('lock-pin-box'),
   dots: document.getElementById('lock-dots'),
   keypad: document.getElementById('lock-keypad'),
   biometricBtn: document.getElementById('lock-biometric-btn'),
   error: document.getElementById('lock-error'),
   hint: document.getElementById('lock-setup-hint'),
+  showSyncLoginBtn: document.getElementById('lock-show-sync-login'),
+  syncLoginBox: document.getElementById('lock-sync-login'),
+  syncServer: document.getElementById('sync-login-server'),
+  syncEmail: document.getElementById('sync-login-email'),
+  syncPassword: document.getElementById('sync-login-password'),
+  syncPin: document.getElementById('sync-login-pin'),
+  syncSubmit: document.getElementById('sync-login-submit'),
+  syncCancel: document.getElementById('sync-login-cancel'),
+  syncError: document.getElementById('sync-login-error'),
 };
 
 let mode = 'unlock'; // 'unlock' | 'setup-first' | 'setup-confirm'
@@ -147,14 +158,18 @@ async function showLockScreen() {
   firstPin = '';
   els.error.textContent = '';
   els.hint.textContent = '';
+  els.syncLoginBox.hidden = true;
+  els.pinBox.hidden = false;
 
   if (await Crypto.isSetup()) {
     mode = 'unlock';
     els.biometricBtn.hidden = !(await Crypto.isBiometricSupported() && await Crypto.isBiometricRegistered());
+    els.showSyncLoginBtn.hidden = true;
   } else {
     mode = 'setup-first';
     els.hint.textContent = `Kies een pincode van ${PIN_LENGTH} cijfers om cliëntgegevens te beveiligen.`;
     els.biometricBtn.hidden = true;
+    els.showSyncLoginBtn.hidden = false;
   }
   renderDots();
   els.view.classList.add('active');
@@ -203,6 +218,56 @@ export function lockNow() {
   Crypto.lock();
   showLockScreen();
 }
+
+// --------------------------------------------------------------------
+// "Al een account op een ander apparaat?" — inloggen op een bestaand
+// sync-account vanaf een NIEUW apparaat, vóórdat er lokaal een pincode
+// bestaat. Haalt de gedeelde sleutel op via sync.js, bindt daarna een
+// lokale pincode aan diezelfde sleutel, en haalt tot slot de bestaande
+// cliëntgegevens van het account binnen.
+// --------------------------------------------------------------------
+
+els.showSyncLoginBtn.addEventListener('click', () => {
+  els.pinBox.hidden = true;
+  els.syncLoginBox.hidden = false;
+  els.syncError.textContent = '';
+});
+
+els.syncCancel.addEventListener('click', () => {
+  els.syncLoginBox.hidden = true;
+  els.pinBox.hidden = false;
+});
+
+els.syncSubmit.addEventListener('click', async () => {
+  const serverUrl = els.syncServer.value.trim();
+  const email = els.syncEmail.value.trim();
+  const password = els.syncPassword.value;
+  const pin = els.syncPin.value.trim();
+
+  els.syncError.textContent = '';
+  if (!serverUrl || !email || !password) {
+    els.syncError.textContent = 'Vul server, e-mail en wachtwoord in.';
+    return;
+  }
+  if (!/^\d{6}$/.test(pin)) {
+    els.syncError.textContent = `Kies een lokale pincode van ${PIN_LENGTH} cijfers.`;
+    return;
+  }
+
+  els.syncSubmit.disabled = true;
+  try {
+    await Sync.loginAccount(serverUrl, email, password); // zet de gedeelde DEK actief
+    await Crypto.setupPinForExistingDek(pin); // bindt een lokale pincode aan diezelfde DEK
+    await Sync.syncNow(); // haalt de bestaande cliëntgegevens van dit account binnen
+    els.syncLoginBox.hidden = true;
+    await finishUnlock();
+  } catch (err) {
+    console.warn('Sync-login mislukt:', err);
+    els.syncError.textContent = err.message || 'Inloggen mislukt. Controleer server, e-mail en wachtwoord.';
+  } finally {
+    els.syncSubmit.disabled = false;
+  }
+});
 
 /** Initialiseert het vergrendelscherm. onUnlock wordt aangeroepen zodra de app mag worden getoond. */
 export function initAuth(onUnlock) {
