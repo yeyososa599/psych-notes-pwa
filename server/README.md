@@ -31,11 +31,22 @@ moet maken — dit valt buiten wat code kan regelen:
    voor deze server (bijv. via de reverse proxy/loadbalancer van je
    hostingpartij). De app weigert data niet actief over http://, maar dit
    is een harde eis voor verantwoord gebruik.
-4. **Een echte database.** `store.js` gebruikt bewust één simpel
-   JSON-bestand zodat het ontwerp makkelijk te lezen/auditen is. Vervang
-   dit voor productiegebruik door een echte database (bijv. PostgreSQL)
-   met back-ups — de functie-namen in `store.js` vormen het contract dat
-   je moet naboetsen.
+4. **Een echte database, of op zijn minst een persistente schijf.**
+   `store.js` gebruikt bewust één simpel JSON-bestand zodat het ontwerp
+   makkelijk te lezen/auditen is. Op de meeste hostingplatforms (o.a.
+   Render, zowel gratis als standaard betaald) is de schijf **niet
+   blijvend**: bij elke herstart van de server (na inactiviteit, of bij
+   een nieuwe deploy) begint het bestandssysteem leeg — dan lijken alle
+   accounts en gesynchroniseerde data ineens verdwenen ("onbekend
+   account" bij inloggen, terwijl het account eerder wél werkte).
+   - **Snelle fix (Render):** voeg in de dashboard van je service een
+     **Disk** toe (tabblad "Disks" → "Add Disk", bijv. 1GB, mount path
+     `/data`) en zet de omgevingsvariabele `DATA_DIR=/data`. Herstart de
+     service — vanaf nu overleeft `data/db.json` een herstart.
+   - **Beter voor echt productiegebruik:** vervang `store.js` alsnog door
+     een echte database (bijv. PostgreSQL) met back-ups — de
+     functie-namen in `store.js` vormen het contract dat je moet
+     naboetsen.
 5. **Rate limiting op `/api/login`.** Deze referentie-server heeft geen
    bescherming tegen het herhaaldelijk raden van wachtwoorden. Voeg dit
    toe (bijv. `express-rate-limit`) vóór productiegebruik.

@@ -32,8 +32,21 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// BELANGRIJK — schijfopslag op de meeste hostingplatforms (o.a. Render,
+// zowel de gratis als de standaard betaalde laag zónder expliciet
+// toegevoegde "Persistent Disk") is NIET blijvend: bij een herstart van de
+// server (bijv. na inactiviteit, of bij elke nieuwe deploy) begint het
+// bestandssysteem gewoon opnieuw, en is data/db.json gewoon weer leeg —
+// alle accounts en gesynchroniseerde data lijken dan "verdwenen".
+//
+// Zet daarom in productie de omgevingsvariabele DATA_DIR op het pad van
+// een echte persistente schijf (bij Render: koppel een "Persistent Disk"
+// aan de service en gebruik het mountpad, bijv. "/data"). Zonder die
+// variabele valt dit terug op een map naast dit bestand — prima voor
+// lokaal ontwikkelen/testen, NIET voor productiegebruik op een platform
+// zonder persistente schijf.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
 
 function emptyDb() {
