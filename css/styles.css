@@ -272,6 +272,16 @@ input[type="search"], input[type="text"], input[type="password"], input[type="em
 }
 .shared-badge { font-size: 0.85em; }
 .section-title { font-size: 1.05rem; margin: 24px 0 10px; }
+.ai-cleanup-section { margin-top: 8px; }
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  margin-bottom: 10px;
+  font-size: 0.95rem;
+}
+.toggle-row input { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; }
 .pending-share-item {
   display: flex;
   flex-direction: column;

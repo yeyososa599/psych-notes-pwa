@@ -27,6 +27,7 @@ const SHELL_FILES = [
   './js/auth.js',
   './js/sync.js',
   './js/sharing.js',
+  './js/aiCleanup.js',
   './icons/icon.svg',
 ];
 

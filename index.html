@@ -143,6 +143,7 @@
       <p class="muted">Controleer en corrigeer de tekst voordat je verdergaat.</p>
       <p id="transcribe-status" class="muted small"></p>
       <textarea id="transcript-text" class="transcript-box" rows="10" placeholder="Transcript verschijnt hier…"></textarea>
+      <button id="restore-original-transcript-btn" class="btn-text" hidden>Herstel originele (niet-gecorrigeerde) tekst</button>
       <div class="form-actions">
         <button id="transcript-back-btn" class="btn btn-secondary">Terug naar opname</button>
         <button id="transcript-continue-btn" class="btn btn-primary">Verder: cliënt controleren</button>
@@ -179,6 +180,17 @@
         <div id="pending-shares-section" hidden>
           <h2 class="section-title">Ontvangen uitnodigingen</h2>
           <ul id="pending-shares-list" class="item-list"></ul>
+        </div>
+
+        <div class="ai-cleanup-section">
+          <h2 class="section-title">AI-tekstcorrectie</h2>
+          <label class="toggle-row">
+            <input type="checkbox" id="ai-cleanup-toggle">
+            <span>Spelling, interpunctie en waarschijnlijk verkeerd-verstane woorden automatisch laten corrigeren</span>
+          </label>
+          <div class="callout warn">
+            <p><strong>Let op:</strong> hiervoor wordt het ruwe transcript (kan een cliëntnaam en inhoud bevatten) via je eigen server naar een externe AI-dienst (Anthropic) gestuurd — dit is de enige plek in de app waar leesbare tekst ergens anders naartoe gaat. Zie <code>server/README.md</code>. Je controleert het resultaat altijd zelf voordat het wordt opgeslagen.</p>
+          </div>
         </div>
 
         <button id="sync-signout-btn" class="btn-text-danger">Uitloggen op dit apparaat</button>

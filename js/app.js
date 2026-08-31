@@ -10,6 +10,7 @@ import { matchClientInTranscript } from './nameMatch.js';
 import { initAuth, lockNow, suspendAutoLock, resumeAutoLock } from './auth.js';
 import * as Sync from './sync.js';
 import * as Sharing from './sharing.js';
+import * as AiCleanup from './aiCleanup.js';
 import { formatDuration, formatDateTime, escapeHtml } from './utils.js';
 
 const state = {
@@ -342,9 +343,15 @@ document.getElementById('record-continue-btn').addEventListener('click', () => {
 
 const transcriptTextEl = document.getElementById('transcript-text');
 const transcribeStatusEl = document.getElementById('transcribe-status');
+const restoreOriginalBtn = document.getElementById('restore-original-transcript-btn');
 
-function openTranscriptView() {
-  transcriptTextEl.value = state.pending.transcript;
+let originalTranscriptBeforeAiCleanup = null;
+
+async function openTranscriptView() {
+  const rawTranscript = state.pending.transcript;
+  transcriptTextEl.value = rawTranscript;
+  restoreOriginalBtn.hidden = true;
+  originalTranscriptBeforeAiCleanup = null;
   transcribeStatusEl.textContent = isTranscriptionSupported()
     ? 'Automatisch getranscribeerd — controleer en corrigeer waar nodig.'
     : 'Automatische transcriptie is niet beschikbaar in deze browser — typ de tekst zelf.';
@@ -357,7 +364,33 @@ function openTranscriptView() {
     },
   });
   setTimeout(() => transcriptTextEl.focus(), 50);
+
+  // AI-tekstcorrectie: uitdrukkelijk opt-in (zie aiCleanup.js) en mag het
+  // opslaan van een aantekening nooit blokkeren — bij falen blijft gewoon
+  // de ruwe tekst staan.
+  if (rawTranscript.trim() && await AiCleanup.isEnabled()) {
+    transcribeStatusEl.textContent = 'Bezig met AI-correctie…';
+    try {
+      const cleaned = await AiCleanup.cleanup(rawTranscript);
+      if (transcriptTextEl.value === rawTranscript) { // gebruiker heeft ondertussen niets zelf getypt
+        transcriptTextEl.value = cleaned;
+        originalTranscriptBeforeAiCleanup = rawTranscript;
+        restoreOriginalBtn.hidden = false;
+        transcribeStatusEl.textContent = 'AI-correctie toegepast — controleer de tekst goed voordat je verdergaat.';
+      }
+    } catch (err) {
+      console.warn('AI-correctie mislukt:', err);
+      transcribeStatusEl.textContent = 'AI-correctie is mislukt — de oorspronkelijke tekst staat hieronder.';
+    }
+  }
 }
+
+restoreOriginalBtn.addEventListener('click', () => {
+  if (originalTranscriptBeforeAiCleanup === null) return;
+  transcriptTextEl.value = originalTranscriptBeforeAiCleanup;
+  restoreOriginalBtn.hidden = true;
+  transcribeStatusEl.textContent = 'Oorspronkelijke tekst hersteld.';
+});
 
 document.getElementById('transcript-back-btn').addEventListener('click', goBack);
 
@@ -517,6 +550,7 @@ async function refreshSyncView() {
     syncSetupFormEl.hidden = true;
     setSyncIndicator('idle');
     await refreshPendingShares();
+    aiCleanupToggleEl.checked = await AiCleanup.isEnabled();
   } else {
     syncStatusEl.textContent = 'Synchronisatie is nog niet ingesteld. Dit apparaat werkt gewoon lokaal door.';
     syncConfiguredActionsEl.hidden = true;
@@ -579,6 +613,11 @@ function openSyncView() {
 }
 
 syncIndicatorBtn.addEventListener('click', openSyncView);
+
+const aiCleanupToggleEl = document.getElementById('ai-cleanup-toggle');
+aiCleanupToggleEl.addEventListener('change', () => {
+  AiCleanup.setEnabled(aiCleanupToggleEl.checked);
+});
 
 document.getElementById('sync-setup-register-btn').addEventListener('click', async () => {
   const serverUrl = document.getElementById('sync-setup-server').value.trim();

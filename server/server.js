@@ -18,6 +18,16 @@
 //     hier binnenkomt is AES-GCM-ciphertext (base64), voor de server
 //     onleesbare ruis.
 //
+// UITZONDERING — AI-tekstcorrectie (optioneel, standaard uit):
+//   /api/ai-cleanup krijgt WEL een leesbaar transcript binnen (de
+//   psycholoog moet het immers kunnen laten corrigeren) en stuurt dat door
+//   naar de Anthropic API om spelling/interpunctie te verbeteren en
+//   waarschijnlijk verkeerd-verstane woorden te corrigeren. Dit is de
+//   ENIGE plek in de hele app waar onversleutelde cliëntgerelateerde tekst
+//   het apparaat/de eigen server verlaat — bewust apart gehouden van de
+//   zero-knowledge sync hierboven. Zie ook js/aiCleanup.js (clientkant) en
+//   server/README.md (welke stappen dit voor de praktijk betekent).
+//
 // PRODUCTIE-EISEN (buiten de scope van deze code, verantwoordelijkheid van
 // wie dit hostet — zie server/README.md):
 //   - Hosting bij een EU-partij, met een verwerkersovereenkomst (AVG).
@@ -217,6 +227,62 @@ app.post('/api/shares/leave', requireSession, async (req, res) => {
   if (!clientId) return badRequest(res, 'clientId ontbreekt.');
   await store.leaveShare(clientId, req.email);
   res.json({ ok: true });
+});
+
+// --------------------------------------------------------------------
+// AI-tekstcorrectie (optioneel — zie de toelichting bovenaan dit bestand)
+//
+// Vereist een ANTHROPIC_API_KEY omgevingsvariabele op de server. Zonder
+// die variabele blijft deze route gewoon een nette foutmelding geven —
+// de rest van de app (incl. gewone sync) functioneert dan onveranderd.
+// --------------------------------------------------------------------
+const AI_CLEANUP_SYSTEM_PROMPT = `Je krijgt een ruw, automatisch getranscribeerd fragment van een gesproken werkaantekening van een psycholoog (Nederlands).
+
+Corrigeer ALLEEN:
+- spelling en interpunctie
+- hoofdlettergebruik
+- overduidelijke verkeerd-verstane woorden — gebruik de context om aannemelijk te maken wat er waarschijnlijk gezegd is
+
+Verzin NOOIT nieuwe inhoud, namen, diagnoses of andere details die niet al in de tekst aanwezig zijn. Verander de betekenis niet en laat twijfelachtige stukken liever ongewijzigd dan te gokken.
+
+Geef UITSLUITEND de gecorrigeerde tekst terug — geen inleiding, geen uitleg, geen aanhalingstekens.`;
+
+app.post('/api/ai-cleanup', requireSession, async (req, res) => {
+  const { transcript } = req.body || {};
+  if (!transcript || !transcript.trim()) return badRequest(res, 'Geen transcript meegegeven.');
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return res.status(503).json({ error: 'AI-correctie is niet geconfigureerd op deze server (ANTHROPIC_API_KEY ontbreekt).' });
+  }
+
+  try {
+    const aiRes = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2048,
+        system: AI_CLEANUP_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: transcript }],
+      }),
+    });
+    const data = await aiRes.json();
+    if (!aiRes.ok) {
+      console.warn('Anthropic API-fout bij AI-correctie:', data);
+      return res.status(502).json({ error: 'AI-correctie is mislukt bij de AI-dienst.' });
+    }
+    const cleanedTranscript = data.content?.[0]?.text?.trim();
+    if (!cleanedTranscript) return res.status(502).json({ error: 'AI-correctie gaf geen bruikbaar resultaat terug.' });
+    res.json({ cleanedTranscript });
+  } catch (err) {
+    console.warn('AI-correctie mislukt:', err);
+    res.status(502).json({ error: 'AI-correctie is mislukt (netwerkfout naar de AI-dienst).' });
+  }
 });
 
 app.listen(PORT, () => {
