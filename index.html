@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#2f5d62">
+<meta name="description" content="Aantekeningen-app voor psychologen — lokaal en versleuteld.">
+<title>Praktijknotities</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon.svg">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<!-- ==========================================================
+     APP-SHELL: alle "schermen" (views) leven in dit ene document.
+     app.js schakelt tussen views door de klasse "active" te zetten.
+     Geen router-library nodig; de app is klein en lineair te gebruiken.
+     ========================================================== -->
+<div id="app">
+
+  <!-- ---------- Vergrendelscherm (Fase 3) ---------- -->
+  <section id="view-lock" class="view">
+    <div class="lock-box">
+      <h1>🔒 Praktijknotities</h1>
+      <p class="muted">Voer je pincode in om verder te gaan.</p>
+      <div id="lock-dots" class="lock-dots"></div>
+      <div id="lock-keypad" class="keypad"></div>
+      <button id="lock-biometric-btn" class="btn btn-secondary" hidden>Ontgrendel met Face ID / vingerafdruk</button>
+      <p id="lock-error" class="error-text" role="alert"></p>
+      <p id="lock-setup-hint" class="muted small"></p>
+    </div>
+  </section>
+
+  <!-- ---------- Header (zichtbaar op alle inhoudsschermen) ---------- -->
+  <header id="app-header" class="app-header">
+    <button id="back-btn" class="icon-btn" hidden aria-label="Terug">←</button>
+    <h1 id="header-title">Cliënten</h1>
+    <div class="header-actions">
+      <span id="sync-indicator" class="sync-indicator" title="Synchronisatiestatus">⏺</span>
+      <button id="lock-now-btn" class="icon-btn" aria-label="Vergrendel nu">🔒</button>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- ---------- Cliëntenlijst ---------- -->
+    <section id="view-clients" class="view active">
+      <div class="list-toolbar">
+        <input id="client-search" type="search" placeholder="Zoek cliënt…" aria-label="Zoek cliënt">
+      </div>
+      <ul id="client-list" class="item-list"></ul>
+      <p id="client-list-empty" class="empty-state" hidden>Nog geen cliënten. Voeg je eerste cliënt toe.</p>
+      <button id="add-client-fab" class="fab" aria-label="Nieuwe cliënt toevoegen">+</button>
+    </section>
+
+    <!-- ---------- Nieuwe cliënt toevoegen ---------- -->
+    <section id="view-add-client" class="view">
+      <form id="add-client-form" class="form-card">
+        <label for="new-client-name">Naam cliënt *</label>
+        <input id="new-client-name" type="text" required autocomplete="off" placeholder="Bijv. Jan de Vries">
+
+        <label for="new-client-note">Dossiernummer / notitie (optioneel)</label>
+        <input id="new-client-note" type="text" autocomplete="off" placeholder="Bijv. dossier #1042">
+
+        <div class="form-actions">
+          <button type="button" id="cancel-add-client" class="btn btn-secondary">Annuleren</button>
+          <button type="submit" class="btn btn-primary">Cliënt opslaan</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ---------- Cliëntdetail: aantekeningen-overzicht ---------- -->
+    <section id="view-client-detail" class="view">
+      <div class="client-detail-meta">
+        <p id="client-detail-note" class="muted"></p>
+      </div>
+      <ul id="notes-list" class="item-list"></ul>
+      <p id="notes-list-empty" class="empty-state" hidden>Nog geen aantekeningen voor deze cliënt.</p>
+      <button id="new-note-fab" class="fab" aria-label="Nieuwe aantekening inspreken">🎙️</button>
+    </section>
+
+    <!-- ---------- Opname maken ---------- -->
+    <section id="view-record" class="view">
+      <div class="record-stage">
+        <p class="muted" id="record-hint">Noem aan het begin de naam van de cliënt, spreek daarna je aantekening in.</p>
+        <div id="record-timer" class="record-timer">00:00</div>
+        <div id="record-visualizer" class="record-visualizer" aria-hidden="true"></div>
+
+        <div id="record-controls" class="record-controls">
+          <button id="record-start-btn" class="btn-record" aria-label="Start opname">
+            <span class="btn-record-dot"></span>
+          </button>
+        </div>
+
+        <div id="record-review-controls" class="record-review-controls" hidden>
+          <audio id="record-playback" controls></audio>
+          <div class="form-actions">
+            <button id="record-discard-btn" class="btn btn-secondary">Opnieuw opnemen</button>
+            <button id="record-continue-btn" class="btn btn-primary">Verder: transcriberen</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- Transcript nakijken ---------- -->
+    <section id="view-transcript" class="view">
+      <p class="muted">Controleer en corrigeer de tekst voordat je verdergaat.</p>
+      <p id="transcribe-status" class="muted small"></p>
+      <textarea id="transcript-text" class="transcript-box" rows="10" placeholder="Transcript verschijnt hier…"></textarea>
+      <div class="form-actions">
+        <button id="transcript-back-btn" class="btn btn-secondary">Terug naar opname</button>
+        <button id="transcript-continue-btn" class="btn btn-primary">Verder: cliënt controleren</button>
+      </div>
+    </section>
+
+    <!-- ---------- Verplichte controlestap: naam bevestigen ---------- -->
+    <section id="view-confirm" class="view">
+      <div class="confirm-card">
+        <p class="muted">Herkende cliënt op basis van gesproken tekst:</p>
+        <h2 id="confirm-name" class="confirm-name">—</h2>
+        <p id="confirm-uncertain" class="error-text" hidden>Geen eenduidige match gevonden — kies handmatig de juiste cliënt.</p>
+
+        <button id="confirm-yes-btn" class="btn btn-primary btn-large">✔ Ja, dit is juist — opslaan</button>
+
+        <details id="confirm-manual" class="confirm-manual">
+          <summary>Nee, kies andere cliënt</summary>
+          <input id="confirm-manual-search" type="search" placeholder="Zoek cliënt…" aria-label="Zoek cliënt">
+          <ul id="confirm-manual-list" class="item-list"></ul>
+        </details>
+
+        <button id="confirm-cancel-btn" class="btn btn-text">Annuleren (niets opslaan)</button>
+      </div>
+    </section>
+
+    <!-- ---------- Aantekening bekijken ---------- -->
+    <section id="view-note-detail" class="view">
+      <div class="note-detail-card">
+        <p id="note-detail-date" class="muted"></p>
+        <audio id="note-detail-audio" controls></audio>
+        <p id="note-detail-transcript" class="note-transcript"></p>
+        <button id="note-delete-btn" class="btn btn-danger">Verwijder aantekening</button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
