@@ -23,6 +23,12 @@
 
 * { box-sizing: border-box; }
 
+/* Garandeert dat het native hidden-attribuut altijd wint, ook op elementen
+   die zelf een class met een eigen display-waarde hebben (bijv.
+   .form-card, .shared-indicator) — anders wint die class-regel van de
+   standaard [hidden]{display:none} en blijft het element zichtbaar. */
+[hidden] { display: none !important; }
+
 html, body {
   height: 100%;
   margin: 0;
@@ -170,6 +176,13 @@ input[type="search"], input[type="text"], input[type="password"], input[type="em
   .fab { right: 20px; }
 }
 .fab:active { transform: scale(0.96); }
+.fab-secondary {
+  bottom: calc(96px + var(--safe-bottom));
+  background: var(--color-primary);
+  width: 52px;
+  height: 52px;
+  font-size: 1.3rem;
+}
 
 /* ---------- Forms ---------- */
 .form-card { display: flex; flex-direction: column; gap: 6px; }

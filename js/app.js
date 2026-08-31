@@ -125,6 +125,12 @@ async function refreshNotes() {
   Notes.renderNotesList(notesListEl, notesListEmptyEl, state.notes, openNoteDetail);
 }
 
+/** Terug naar de cliënt waar de huidige actie bij hoort, of naar de lijst als die er niet is (snel inspreken zonder vooraf een cliënt te kiezen). */
+function backToClientOrList() {
+  if (state.currentClient) openClientDetail(state.currentClient);
+  else openClientList();
+}
+
 function openClientDetail(client) {
   state.currentClient = client;
   clientDetailNoteEl.textContent = client.note || '';
@@ -138,7 +144,16 @@ function openClientDetail(client) {
 
 document.getElementById('new-note-fab').addEventListener('click', () => {
   if (!state.currentClient) return;
-  openRecordView();
+  openRecordView(state.currentClient);
+});
+
+// Snel inspreken zonder eerst een cliënt te kiezen: de naamherkenning
+// (nameMatch.js) moet dan helemaal op zichzelf de juiste cliënt vinden —
+// zie de toelichting bij view-confirm. Zo blijft die functie ook echt
+// nuttig, in plaats van altijd al "overruled" te worden doordat je toch al
+// op een cliëntpagina stond.
+document.getElementById('quick-record-fab').addEventListener('click', () => {
+  openRecordView(null);
 });
 
 deleteClientBtn.addEventListener('click', async () => {
@@ -246,13 +261,18 @@ function resetRecordView() {
   state.pending.match = null;
 }
 
-function openRecordView() {
+/** @param {object|null} originClient — de cliëntpagina waar dit vandaan komt, of null bij "snel inspreken" vanaf de cliëntenlijst. */
+function openRecordView(originClient) {
+  state.currentClient = originClient;
   resetRecordView();
   if (!isRecordingSupported()) {
     recordHintEl.textContent = 'Opnemen wordt niet ondersteund in deze browser.';
     recordStartBtn.disabled = true;
-  } else {
+  } else if (originClient) {
     recordHintEl.textContent = 'Noem aan het begin de naam van de cliënt, spreek daarna je aantekening in.';
+    recordStartBtn.disabled = false;
+  } else {
+    recordHintEl.textContent = 'Noem eerst duidelijk de naam van de cliënt — de app herkent daaraan wie het is.';
     recordStartBtn.disabled = false;
   }
   showView('record', {
@@ -260,7 +280,7 @@ function openRecordView() {
     onBack: () => {
       if (isRecording) { recorder?.cancel(); resumeAutoLock(); }
       liveTranscription?.stop();
-      openClientDetail(state.currentClient);
+      backToClientOrList();
     },
   });
 }
@@ -333,7 +353,7 @@ function openTranscriptView() {
     onBack: () => {
       recordControlsEl.hidden = true;
       recordReviewEl.hidden = false;
-      showView('record', { title: 'Nieuwe aantekening', onBack: () => openClientDetail(state.currentClient) });
+      showView('record', { title: 'Nieuwe aantekening', onBack: backToClientOrList });
     },
   });
   setTimeout(() => transcriptTextEl.focus(), 50);
@@ -383,7 +403,7 @@ function openConfirmView() {
         title: 'Transcript', onBack: () => {
           recordControlsEl.hidden = true;
           recordReviewEl.hidden = false;
-          showView('record', { title: 'Nieuwe aantekening', onBack: () => openClientDetail(state.currentClient) });
+          showView('record', { title: 'Nieuwe aantekening', onBack: backToClientOrList });
         },
       });
     },
@@ -415,7 +435,7 @@ confirmYesBtn.addEventListener('click', async () => {
 document.getElementById('confirm-cancel-btn').addEventListener('click', () => {
   // Niets opslaan — expliciete keuze van de psycholoog.
   resetRecordView();
-  openClientDetail(state.currentClient);
+  backToClientOrList();
 });
 
 async function saveConfirmedNote(client) {
