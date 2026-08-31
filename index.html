@@ -6,6 +6,12 @@
 <meta name="theme-color" content="#2f5d62">
 <meta name="description" content="Aantekeningen-app voor psychologen — lokaal en versleuteld.">
 <title>Praktijknotities</title>
+<!-- manifest.webmanifest gebruikt display:"browser" i.p.v. "standalone": op
+     Android/Chrome kan spraakherkenning (transcription.js) niet betrouwbaar
+     werken in een standalone/geïnstalleerd app-venster, wél in een gewoon
+     browsertabblad. "Add to Home Screen" opent daardoor als bladwijzer in
+     Chrome i.p.v. als losstaand app-venster — bewuste ruil van het
+     "app-gevoel" voor werkende automatische transcriptie. -->
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon.svg">
