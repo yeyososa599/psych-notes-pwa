@@ -37,6 +37,15 @@ export async function addNote({ clientId, transcript, audioBlob, mimeType, durat
 export async function getNote(id) {
   const record = await db.get('notes', id);
   if (!record) return null;
+  if (record.purgedLocally) {
+    // Audio/transcript zijn hier bewust al lokaal gewist (zie
+    // purgeExpiredLocalCopies) — er valt niets meer te ontsleutelen.
+    return {
+      id: record.id, clientId: record.clientId, purgedLocally: true,
+      transcript: null, audioBlob: null, mimeType: null,
+      durationSec: record.durationSec, createdAt: record.createdAt, updatedAt: record.updatedAt,
+    };
+  }
   const key = await Crypto.getKeyForClient(record.clientId);
   const [transcript, audioBlob] = await Promise.all([
     Crypto.decryptFieldWithKey(record.encTranscript, key),
@@ -101,14 +110,19 @@ export async function getNotesForClient(clientId) {
   const all = await db.getAllByIndex('notes', 'clientId', clientId);
   const active = all.filter(n => !n.deleted).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const key = await Crypto.getKeyForClient(clientId); // één keer per cliënt, niet per aantekening
-  return Promise.all(active.map(async (record) => ({
-    id: record.id,
-    clientId: record.clientId,
-    transcript: await Crypto.decryptFieldWithKey(record.encTranscript, key),
-    durationSec: record.durationSec,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  })));
+  return Promise.all(active.map(async (record) => {
+    if (record.purgedLocally) {
+      return { id: record.id, clientId: record.clientId, purgedLocally: true, transcript: null, durationSec: record.durationSec, createdAt: record.createdAt, updatedAt: record.updatedAt };
+    }
+    return {
+      id: record.id,
+      clientId: record.clientId,
+      transcript: await Crypto.decryptFieldWithKey(record.encTranscript, key),
+      durationSec: record.durationSec,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    };
+  }));
 }
 
 export function renderNotesList(listEl, emptyEl, notes, onSelect) {
@@ -116,14 +130,79 @@ export function renderNotesList(listEl, emptyEl, notes, onSelect) {
   emptyEl.hidden = notes.length > 0;
   for (const note of notes) {
     const li = document.createElement('li');
-    const preview = (note.transcript || '(geen transcript)').slice(0, 90);
-    li.innerHTML = `
-      <span class="item-title">${formatDateTime(note.createdAt)}</span>
-      <span class="item-sub">${escapeHtml(preview)}${note.transcript?.length > 90 ? '…' : ''} · ${formatDuration(note.durationSec)}</span>
-    `;
+    if (note.purgedLocally) {
+      li.innerHTML = `
+        <span class="item-title">${formatDateTime(note.createdAt)}</span>
+        <span class="item-sub">🔒 Alleen nog op je computer — automatisch opgeschoond na synchronisatie</span>
+      `;
+    } else {
+      const preview = (note.transcript || '(geen transcript)').slice(0, 90);
+      li.innerHTML = `
+        <span class="item-title">${formatDateTime(note.createdAt)}</span>
+        <span class="item-sub">${escapeHtml(preview)}${note.transcript?.length > 90 ? '…' : ''} · ${formatDuration(note.durationSec)}</span>
+      `;
+    }
     li.addEventListener('click', () => onSelect(note));
     listEl.appendChild(li);
   }
+}
+
+// --------------------------------------------------------------------
+// Automatisch lokaal opschonen op dit apparaat (optioneel, per apparaat
+// in te stellen — zie app.js / het "autoPurgeEnabled"-scherm bij
+// Synchronisatie-instellingen). Bedoeld voor bijv. de telefoon: audio +
+// transcript verdwijnen hier lokaal een vast aantal uren NADAT ze
+// bevestigd zijn gesynchroniseerd, en blijven daarna alleen nog op de
+// andere apparaten (bijv. de computer) staan. De cliëntnaam zelf blijft
+// gewoon staan — die is nodig om de app te kunnen blijven gebruiken.
+//
+// BELANGRIJK: dit is een puur LOKALE bewerking. Het overschreven record
+// behoudt zijn originele updatedAt, dus sync.js's "is dit gewijzigd
+// sinds de laatste sync"-check (updatedAt > since) ziet dit NIET als een
+// wijziging — er wordt dus nooit per ongeluk een verwijdering naar de
+// server (en daarmee naar andere apparaten) gestuurd.
+// --------------------------------------------------------------------
+
+const AUTO_PURGE_META_KEY = 'autoPurgeEnabled';
+export const AUTO_PURGE_RETENTION_HOURS = 48;
+
+export async function isAutoPurgeEnabled() {
+  const rec = await db.get('meta', AUTO_PURGE_META_KEY);
+  return !!rec?.value;
+}
+
+export async function setAutoPurgeEnabled(enabled) {
+  await db.put('meta', { key: AUTO_PURGE_META_KEY, value: !!enabled });
+}
+
+/** Markeert lokale notes die net bevestigd zijn gesynchroniseerd, zodat de bewaartermijn vanaf nu kan gaan lopen. */
+export async function markSyncedIfNeeded(lastSyncAt) {
+  if (!lastSyncAt) return;
+  const all = await db.getAll('notes');
+  const now = new Date().toISOString();
+  for (const record of all) {
+    if (record.deleted || record.purgedLocally || record.syncedAt) continue;
+    if (record.updatedAt <= lastSyncAt) {
+      await db.put('notes', { ...record, syncedAt: now });
+    }
+  }
+}
+
+/** Wist audio+transcript lokaal voor notes die langer dan retentionHours geleden bevestigd zijn gesynchroniseerd. Geeft het aantal opgeschoonde notes terug. */
+export async function purgeExpiredLocalCopies(retentionHours) {
+  const all = await db.getAll('notes');
+  const cutoff = Date.now() - retentionHours * 60 * 60 * 1000;
+  let purged = 0;
+  for (const record of all) {
+    if (record.deleted || record.purgedLocally || !record.syncedAt) continue;
+    if (new Date(record.syncedAt).getTime() > cutoff) continue;
+    await db.put('notes', {
+      id: record.id, clientId: record.clientId, deleted: false, purgedLocally: true,
+      durationSec: record.durationSec, createdAt: record.createdAt, updatedAt: record.updatedAt,
+    });
+    purged++;
+  }
+  return purged;
 }
 
 export function audioBlobUrl(note) {

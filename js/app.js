@@ -502,8 +502,17 @@ async function openNoteDetail(noteSummary) {
   if (!note || note.id !== openNoteId) return; // ondertussen iets anders geopend
   noteDetailDateEl.textContent = `${formatDateTime(note.createdAt)} · ${formatDuration(note.durationSec)}`;
   if (noteDetailAudioEl.src) URL.revokeObjectURL(noteDetailAudioEl.src);
-  noteDetailAudioEl.src = Notes.audioBlobUrl(note);
-  noteDetailTranscriptEl.textContent = note.transcript || '(geen transcript)';
+  if (note.purgedLocally) {
+    noteDetailAudioEl.removeAttribute('src');
+    noteDetailAudioEl.hidden = true;
+    noteDetailTranscriptEl.textContent = '🔒 Deze aantekening is automatisch van dit apparaat verwijderd, ' +
+      'een vaste tijd nadat ze bevestigd was gesynchroniseerd — bekijk de aantekening op je computer ' +
+      '(of een ander apparaat waar automatisch opschonen uitstaat).';
+  } else {
+    noteDetailAudioEl.hidden = false;
+    noteDetailAudioEl.src = Notes.audioBlobUrl(note);
+    noteDetailTranscriptEl.textContent = note.transcript || '(geen transcript)';
+  }
   showView('noteDetail', { title: 'Aantekening', onBack: () => openClientDetail(state.currentClient) });
 }
 
@@ -551,6 +560,7 @@ async function refreshSyncView() {
     setSyncIndicator('idle');
     await refreshPendingShares();
     aiCleanupToggleEl.checked = await AiCleanup.isEnabled();
+    autoPurgeToggleEl.checked = await Notes.isAutoPurgeEnabled();
   } else {
     syncStatusEl.textContent = 'Synchronisatie is nog niet ingesteld. Dit apparaat werkt gewoon lokaal door.';
     syncConfiguredActionsEl.hidden = true;
@@ -659,6 +669,8 @@ async function trySync() {
     const result = await Sync.syncNow();
     syncLastResultEl.textContent = `Laatste sync: ${result.pushed} verstuurd, ${result.pulled} ontvangen.`;
     setSyncIndicator('idle');
+    const account = await Sync.getAccountState();
+    await runLocalPurgeCheck(account?.lastSyncAt);
     // Lokale wijzigingen die net zijn binnengehaald (bijv. van het andere
     // apparaat) direct zichtbaar maken in het huidige scherm.
     if (els.views.clients.classList.contains('active')) refreshClients();
@@ -670,8 +682,26 @@ async function trySync() {
   }
 }
 
+// ---------------------------------------------------------------------
+// Automatisch lokaal opschonen (optioneel, per apparaat — zie notes.js)
+// ---------------------------------------------------------------------
+
+const autoPurgeToggleEl = document.getElementById('auto-purge-toggle');
+autoPurgeToggleEl.addEventListener('change', () => {
+  Notes.setAutoPurgeEnabled(autoPurgeToggleEl.checked);
+});
+
+/** @param {string|null|undefined} lastSyncAt — als bekend: markeert net-gesynchroniseerde notes; werkt ook zonder (puur lokale opschoning op basis van eerder gezette markeringen). */
+async function runLocalPurgeCheck(lastSyncAt) {
+  if (!(await Notes.isAutoPurgeEnabled())) return;
+  if (lastSyncAt) await Notes.markSyncedIfNeeded(lastSyncAt);
+  const purged = await Notes.purgeExpiredLocalCopies(Notes.AUTO_PURGE_RETENTION_HOURS);
+  if (purged > 0 && els.views.clientDetail.classList.contains('active')) refreshNotes();
+}
+
 window.addEventListener('online', () => { trySync(); });
 setInterval(() => { trySync(); }, 5 * 60 * 1000); // elke 5 minuten een stille poging, geen effect als sync niet is ingesteld of er geen internet is
+setInterval(() => { runLocalPurgeCheck(null); }, 30 * 60 * 1000); // puur lokale check, ook zonder internet — vangt de 48-uursgrens ook op als sync (tijdelijk) niet lukt
 
 // ---------------------------------------------------------------------
 // Init
@@ -683,6 +713,7 @@ setInterval(() => { trySync(); }, 5 * 60 * 1000); // elke 5 minuten een stille p
 initAuth(() => {
   openClientList();
   Sync.isEnabled().then(enabled => setSyncIndicator(enabled ? 'idle' : 'off'));
+  runLocalPurgeCheck(null); // vangt de 48-uursgrens op die verstreken kan zijn terwijl de app dicht was
   trySync();
 });
 
