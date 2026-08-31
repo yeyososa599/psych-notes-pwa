@@ -24,13 +24,19 @@ export async function addClient(name, note) {
 }
 
 async function decryptClientRecord(record) {
+  // Gedeelde cliënten (zie sharing.js) zijn versleuteld met een eigen
+  // sleutel per cliënt i.p.v. de persoonlijke DEK — getKeyForClient kiest
+  // automatisch de juiste, transparant voor de rest van deze module.
+  const key = await Crypto.getKeyForClient(record.id);
+  const shared = await Crypto.hasSharedClientKey(record.id);
   return {
     id: record.id,
-    name: await Crypto.decryptField(record.encName),
-    note: await Crypto.decryptField(record.encNote),
+    name: await Crypto.decryptFieldWithKey(record.encName, key),
+    note: await Crypto.decryptFieldWithKey(record.encNote, key),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     deleted: record.deleted,
+    shared,
   };
 }
 
@@ -99,7 +105,7 @@ export function renderClientList(listEl, emptyEl, clients, filterText, onSelect)
   for (const client of filtered) {
     const li = document.createElement('li');
     li.innerHTML = `
-      <span class="item-title">${escapeHtml(client.name)}</span>
+      <span class="item-title">${escapeHtml(client.name)}${client.shared ? ' <span class="shared-badge" title="Gedeeld met een collega">🔗</span>' : ''}</span>
       ${client.note ? `<span class="item-sub">${escapeHtml(client.note)}</span>` : ''}
     `;
     li.addEventListener('click', () => onSelect(client));

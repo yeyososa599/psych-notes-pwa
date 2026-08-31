@@ -246,6 +246,28 @@ input[type="search"], input[type="text"], input[type="password"], input[type="em
 .note-detail-card audio { width: 100%; }
 .note-transcript { white-space: pre-wrap; line-height: 1.5; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius); padding: 14px; }
 
+/* ---------- Delen met collega ---------- */
+.shared-indicator {
+  display: inline-block;
+  background: var(--color-accent);
+  color: white;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  margin: 4px 0 10px;
+}
+.shared-badge { font-size: 0.85em; }
+.section-title { font-size: 1.05rem; margin: 24px 0 10px; }
+.pending-share-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: default !important;
+}
+.pending-share-item .pending-share-actions { display: flex; gap: 8px; }
+.pending-share-item .pending-share-actions .btn { flex: 1; padding: 10px; font-size: 0.9rem; }
+
 /* ---------- Misc ---------- */
 .muted { color: var(--color-muted); }
 .small { font-size: 0.85rem; }

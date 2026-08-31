@@ -14,12 +14,16 @@ import * as Crypto from './crypto.js';
 import { uuid, formatDateTime, formatDuration, escapeHtml } from './utils.js';
 
 export async function addNote({ clientId, transcript, audioBlob, mimeType, durationSec }) {
+  // Een aantekening onder een gedeelde cliënt (zie sharing.js) wordt
+  // automatisch met diens gedeelde sleutel versleuteld i.p.v. de
+  // persoonlijke DEK — getKeyForClient regelt dat transparant.
+  const key = await Crypto.getKeyForClient(clientId);
   const now = new Date().toISOString();
   const record = {
     id: uuid(),
     clientId,
-    encTranscript: await Crypto.encryptField(transcript || ''),
-    encAudio: await Crypto.encryptBlob(audioBlob),
+    encTranscript: await Crypto.encryptFieldWithKey(transcript || '', key),
+    encAudio: await Crypto.encryptBlobWithKey(audioBlob, key),
     durationSec: durationSec || 0,
     createdAt: now,
     updatedAt: now,
@@ -33,9 +37,10 @@ export async function addNote({ clientId, transcript, audioBlob, mimeType, durat
 export async function getNote(id) {
   const record = await db.get('notes', id);
   if (!record) return null;
+  const key = await Crypto.getKeyForClient(record.clientId);
   const [transcript, audioBlob] = await Promise.all([
-    Crypto.decryptField(record.encTranscript),
-    Crypto.decryptBlob(record.encAudio),
+    Crypto.decryptFieldWithKey(record.encTranscript, key),
+    Crypto.decryptBlobWithKey(record.encAudio, key),
   ]);
   return {
     id: record.id,
@@ -95,10 +100,11 @@ export async function putRawNoteRecords(records) {
 export async function getNotesForClient(clientId) {
   const all = await db.getAllByIndex('notes', 'clientId', clientId);
   const active = all.filter(n => !n.deleted).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const key = await Crypto.getKeyForClient(clientId); // één keer per cliënt, niet per aantekening
   return Promise.all(active.map(async (record) => ({
     id: record.id,
     clientId: record.clientId,
-    transcript: await Crypto.decryptField(record.encTranscript),
+    transcript: await Crypto.decryptFieldWithKey(record.encTranscript, key),
     durationSec: record.durationSec,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,

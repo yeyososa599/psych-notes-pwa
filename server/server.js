@@ -125,11 +125,98 @@ app.post('/api/sync/push', requireSession, async (req, res) => {
 app.get('/api/sync/pull', requireSession, async (req, res) => {
   const since = req.query.since || null;
   const serverTime = new Date().toISOString();
-  const [clients, notes] = await Promise.all([
+  const [clients, notes, sharedKeys] = await Promise.all([
     store.pullRecords(req.email, 'clients', since),
     store.pullRecords(req.email, 'notes', since),
+    store.pullSharedKeys(req.email),
   ]);
-  res.json({ clients, notes, serverTime });
+  res.json({ clients, notes, sharedKeys, serverTime });
+});
+
+// --------------------------------------------------------------------
+// Delen met een collega (zie js/sharing.js voor de clientkant)
+//
+// Alles wat hier binnenkomt is al ciphertext of een publieke sleutel —
+// deze server ziet nooit een cliëntnaam, notitie, transcript of audio,
+// ook niet van gedeelde cliënten.
+// --------------------------------------------------------------------
+
+// Eigen sleutelpaar instellen/bijwerken (publieke sleutel + de EIGEN
+// versleutelde privésleutel, voor bootstrap op een tweede apparaat).
+app.post('/api/sharingkey', requireSession, async (req, res) => {
+  const { publicKeyJwk, wrappedSharingPrivateKey } = req.body || {};
+  if (!publicKeyJwk || !wrappedSharingPrivateKey) return badRequest(res, 'Ontbrekende velden.');
+  await store.setSharingKeypair(req.email, { publicKeyJwk, wrappedSharingPrivateKey });
+  res.json({ ok: true });
+});
+
+// Eigen sleutelpaar ophalen (alleen voor jezelf — nodig op een nieuw apparaat).
+app.get('/api/sharingkey', requireSession, async (req, res) => {
+  const keypair = await store.getSharingKeypair(req.email);
+  res.json(keypair || { publicKeyJwk: null, wrappedSharingPrivateKey: null });
+});
+
+// Publieke sleutel van een COLLEGA opvragen, om iets met hen te kunnen delen.
+app.get('/api/publickey', requireSession, async (req, res) => {
+  const email = req.query.email;
+  const publicKeyJwk = email && await store.getPublicKey(email);
+  if (!publicKeyJwk) return res.status(404).json({ error: 'Geen (bekend) account met publieke sleutel voor dit e-mailadres.' });
+  res.json({ publicKeyJwk });
+});
+
+app.post('/api/shares', requireSession, async (req, res) => {
+  const { clientId, recipientEmail, wrappedKeyForRecipient, wrappedKeyForSender, encClientSnapshot, encNotesSnapshot } = req.body || {};
+  if (!clientId || !recipientEmail || !wrappedKeyForRecipient || !wrappedKeyForSender || !encClientSnapshot) {
+    return badRequest(res, 'Ontbrekende velden.');
+  }
+  if (recipientEmail === req.email) return badRequest(res, 'Je kunt niet met jezelf delen.');
+  const recipientKey = await store.getPublicKey(recipientEmail);
+  if (!recipientKey) return res.status(404).json({ error: 'Onbekende collega (nog geen account of nog niet online geweest).' });
+
+  await store.moveClientToShared(req.email, clientId, wrappedKeyForSender);
+  // De initiële snapshot komt meteen ook in de gedeelde emmer terecht, zodat
+  // de afzender zelf niet los nog een keer hoeft te pushen.
+  await store.pushRecords(req.email, 'clients', [encClientSnapshot]);
+  if (Array.isArray(encNotesSnapshot) && encNotesSnapshot.length) {
+    await store.pushRecords(req.email, 'notes', encNotesSnapshot);
+  }
+
+  const shareId = crypto.randomBytes(16).toString('hex');
+  await store.createPendingShare(shareId, {
+    clientId, fromEmail: req.email, toEmail: recipientEmail,
+    wrappedKeyForRecipient, encClientSnapshot, createdAt: new Date().toISOString(),
+  });
+  res.json({ shareId });
+});
+
+app.get('/api/shares/pending', requireSession, async (req, res) => {
+  const shares = await store.getPendingSharesFor(req.email);
+  res.json({ shares });
+});
+
+app.post('/api/shares/:id/accept', requireSession, async (req, res) => {
+  try {
+    await store.acceptShare(req.params.id, req.email);
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: 'Uitnodiging niet gevonden of al verwerkt.' });
+  }
+});
+
+app.post('/api/shares/:id/decline', requireSession, async (req, res) => {
+  try {
+    await store.declineShare(req.params.id, req.email);
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: 'Uitnodiging niet gevonden of al verwerkt.' });
+  }
+});
+
+app.post('/api/shares/leave', requireSession, async (req, res) => {
+  const { clientId } = req.body || {};
+  if (!clientId) return badRequest(res, 'clientId ontbreekt.');
+  await store.leaveShare(clientId, req.email);
+  res.json({ ok: true });
 });
 
 app.listen(PORT, () => {

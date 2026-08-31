@@ -190,34 +190,58 @@ function requireUnlocked() {
   if (!dek) throw new Error('App is vergrendeld — kan niet (ont)versleutelen zonder geldige pincode.');
 }
 
-export async function encryptField(plaintext) {
-  requireUnlocked();
+// Sleutel-expliciete primitieven — gebruikt door clients.js/notes.js zowel
+// voor de persoonlijke DEK (via de wrappers hieronder) als voor gedeelde-
+// cliëntsleutels (rechtstreeks, via getKeyForClient hierboven).
+
+export async function encryptFieldWithKey(plaintext, key) {
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const data = new Uint8Array(
-    await crypto.subtle.encrypt({ name: AES_ALGO, iv }, dek, new TextEncoder().encode(plaintext ?? ''))
+    await crypto.subtle.encrypt({ name: AES_ALGO, iv }, key, new TextEncoder().encode(plaintext ?? ''))
   );
   return { iv, data };
+}
+
+export async function decryptFieldWithKey(enc, key) {
+  if (!enc) return '';
+  const buf = await crypto.subtle.decrypt({ name: AES_ALGO, iv: enc.iv }, key, enc.data);
+  return new TextDecoder().decode(buf);
+}
+
+export async function encryptBlobWithKey(blob, key) {
+  const buf = await blob.arrayBuffer();
+  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
+  const data = new Uint8Array(await crypto.subtle.encrypt({ name: AES_ALGO, iv }, key, buf));
+  return { iv, data, mimeType: blob.type };
+}
+
+export async function decryptBlobWithKey(enc, key) {
+  const buf = await crypto.subtle.decrypt({ name: AES_ALGO, iv: enc.iv }, key, enc.data);
+  return new Blob([buf], { type: enc.mimeType });
+}
+
+// Gemaksvarianten die altijd de persoonlijke DEK gebruiken (de bestaande,
+// niet-gedeelde opslag — ongewijzigd t.o.v. vóór het delen-met-collega's).
+
+export async function encryptField(plaintext) {
+  requireUnlocked();
+  return encryptFieldWithKey(plaintext, dek);
 }
 
 export async function decryptField(enc) {
   if (!enc) return '';
   requireUnlocked();
-  const buf = await crypto.subtle.decrypt({ name: AES_ALGO, iv: enc.iv }, dek, enc.data);
-  return new TextDecoder().decode(buf);
+  return decryptFieldWithKey(enc, dek);
 }
 
 export async function encryptBlob(blob) {
   requireUnlocked();
-  const buf = await blob.arrayBuffer();
-  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
-  const data = new Uint8Array(await crypto.subtle.encrypt({ name: AES_ALGO, iv }, dek, buf));
-  return { iv, data, mimeType: blob.type };
+  return encryptBlobWithKey(blob, dek);
 }
 
 export async function decryptBlob(enc) {
   requireUnlocked();
-  const buf = await crypto.subtle.decrypt({ name: AES_ALGO, iv: enc.iv }, dek, enc.data);
-  return new Blob([buf], { type: enc.mimeType });
+  return decryptBlobWithKey(enc, dek);
 }
 
 // --------------------------------------------------------------------
@@ -305,4 +329,129 @@ export async function unlockWithBiometric() {
   } catch {
     return false;
   }
+}
+
+// --------------------------------------------------------------------
+// Delen met een collega (zie sharing.js) — RSA-OAEP sleutelpaar.
+//
+// Waarom een APART sleutelpaar naast de DEK? De DEK is alleen bruikbaar
+// als je 'm al kent (gedeeld via wachtwoord tussen JOUW eigen apparaten,
+// zie hierboven). Om iets te kunnen versturen naar iemand met wie je nog
+// nooit een geheim hebt uitgewisseld — een collega — is asymmetrische
+// cryptografie nodig: een publieke sleutel die iedereen mag kennen, en een
+// bijbehorende privésleutel die alleen jij kunt gebruiken (zelf weer
+// versleuteld met je eigen DEK, dus nooit leesbaar door de server).
+// --------------------------------------------------------------------
+
+const RSA_ALGO = { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' };
+
+let sharingPublicKeyJwk = null; // cache, plaintext (publieke sleutels zijn niet geheim)
+let sharingPrivateKey = null;   // cache, CryptoKey — alleen in het geheugen ná ontgrendelen
+
+/** Genereert (indien nog niet aanwezig) een sleutelpaar en slaat het lokaal op, gewrapt met de DEK. */
+export async function ensureSharingKeypair() {
+  requireUnlocked();
+  const existing = await db.get('meta', 'sharingKeypair');
+  if (existing) {
+    sharingPublicKeyJwk = existing.value.publicKeyJwk;
+    return { publicKeyJwk: sharingPublicKeyJwk, isNew: false };
+  }
+
+  const pair = await crypto.subtle.generateKey(RSA_ALGO, true, ['encrypt', 'decrypt']);
+  const publicKeyJwk = await crypto.subtle.exportKey('jwk', pair.publicKey);
+  const privateKeyJwk = await crypto.subtle.exportKey('jwk', pair.privateKey);
+  const encPrivateKeyJwk = await encryptField(JSON.stringify(privateKeyJwk));
+
+  await db.put('meta', { key: 'sharingKeypair', value: { publicKeyJwk, encPrivateKeyJwk } });
+  sharingPublicKeyJwk = publicKeyJwk;
+  sharingPrivateKey = pair.privateKey;
+  return { publicKeyJwk, isNew: true };
+}
+
+/** Slaat een sleutelpaar op dat van de server kwam (bootstrap op een nieuw apparaat — zie sharing.js). */
+export async function importSharingKeypairFromAccount(publicKeyJwk, encPrivateKeyJwk) {
+  await db.put('meta', { key: 'sharingKeypair', value: { publicKeyJwk, encPrivateKeyJwk } });
+  sharingPublicKeyJwk = publicKeyJwk;
+  sharingPrivateKey = null; // wordt lazy ontsleuteld bij eerste gebruik
+}
+
+export async function getSharingKeypairRecord() {
+  const rec = await db.get('meta', 'sharingKeypair');
+  return rec ? rec.value : null;
+}
+
+async function getSharingPrivateKey() {
+  if (sharingPrivateKey) return sharingPrivateKey;
+  requireUnlocked();
+  const rec = await db.get('meta', 'sharingKeypair');
+  if (!rec) throw new Error('Nog geen deel-sleutelpaar aangemaakt.');
+  const privateKeyJwkText = await decryptField(rec.value.encPrivateKeyJwk);
+  sharingPrivateKey = await crypto.subtle.importKey(
+    'jwk', JSON.parse(privateKeyJwkText), RSA_ALGO, false, ['decrypt']
+  );
+  return sharingPrivateKey;
+}
+
+/** Wrapt een rauwe AES-sleutel (bijv. een gedeelde-cliëntsleutel) met iemands publieke RSA-sleutel. */
+export async function wrapKeyForPublicKey(rawKeyBytes, publicKeyJwk) {
+  const publicKey = await crypto.subtle.importKey('jwk', publicKeyJwk, RSA_ALGO, false, ['encrypt']);
+  const data = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, publicKey, rawKeyBytes);
+  return new Uint8Array(data);
+}
+
+/** Ontsleutelt een met ONZE publieke sleutel gewrapte AES-sleutel, met onze eigen privésleutel. */
+export async function unwrapKeyWithOwnPrivateKey(wrappedBytes) {
+  const privateKey = await getSharingPrivateKey();
+  const raw = await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, privateKey, wrappedBytes);
+  return new Uint8Array(raw);
+}
+
+// --------------------------------------------------------------------
+// Gedeelde-cliëntsleutels (Shared Client Keys — SCK's)
+//
+// Elke gedeelde cliënt heeft zijn EIGEN, willekeurige AES-sleutel — nooit
+// de persoonlijke DEK van een van beide psychologen. Zo geeft delen van
+// cliënt A nooit toegang tot cliënt B, ook niet met dezelfde collega.
+// --------------------------------------------------------------------
+
+const sharedKeyCache = new Map(); // clientId -> CryptoKey (AES-GCM), alleen in het geheugen
+
+export async function generateSharedClientKey() {
+  const key = await crypto.subtle.generateKey({ name: AES_ALGO, length: 256 }, true, ['encrypt', 'decrypt']);
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', key));
+  return { key, raw };
+}
+
+/** Importeert rauwe sleutelbytes (bijv. een ontsleutelde SCK) als bruikbare AES-GCM-sleutel. */
+export async function importAesKey(rawBytes) {
+  return crypto.subtle.importKey('raw', rawBytes, { name: AES_ALGO }, false, ['encrypt', 'decrypt']);
+}
+
+/** Slaat de (met onze publieke sleutel gewrapte) sleutel van een gedeelde cliënt lokaal op. */
+export async function storeSharedClientKey(clientId, wrappedKeyBytes) {
+  await db.put('meta', { key: `sharedKey:${clientId}`, value: { wrappedKeyBytes } });
+  sharedKeyCache.delete(clientId); // her-ontsleutelen bij volgend gebruik
+}
+
+export async function hasSharedClientKey(clientId) {
+  return !!(await db.get('meta', `sharedKey:${clientId}`));
+}
+
+export async function removeSharedClientKey(clientId) {
+  await db.delete('meta', `sharedKey:${clientId}`);
+  sharedKeyCache.delete(clientId);
+}
+
+/** Geeft de juiste sleutel voor een cliënt terug: de gedeelde sleutel indien van toepassing, anders de gewone DEK. */
+export async function getKeyForClient(clientId) {
+  if (sharedKeyCache.has(clientId)) return sharedKeyCache.get(clientId);
+  const rec = await db.get('meta', `sharedKey:${clientId}`);
+  if (!rec) {
+    requireUnlocked();
+    return dek;
+  }
+  const raw = await unwrapKeyWithOwnPrivateKey(rec.value.wrappedKeyBytes);
+  const key = await crypto.subtle.importKey('raw', raw, { name: AES_ALGO }, false, ['encrypt', 'decrypt']);
+  sharedKeyCache.set(clientId, key);
+  return key;
 }

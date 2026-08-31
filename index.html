@@ -93,6 +93,20 @@
     <section id="view-client-detail" class="view">
       <div class="client-detail-meta">
         <p id="client-detail-note" class="muted"></p>
+        <p id="client-shared-indicator" class="shared-indicator" hidden>🔗 Gedeeld met een collega</p>
+
+        <button id="share-client-btn" class="btn-text">Delen met collega…</button>
+        <div id="share-client-form" class="form-card" hidden>
+          <label for="share-client-email">E-mailadres van collega</label>
+          <input id="share-client-email" type="email" autocomplete="off">
+          <p class="muted small">De aantekeningen van deze cliënt blijven daarna doorlopend gedeeld — nieuwe aantekeningen van jullie allebei komen bij elkaar terecht. Je collega moet dit expliciet accepteren.</p>
+          <div class="form-actions">
+            <button id="share-client-cancel" class="btn btn-secondary" type="button">Annuleren</button>
+            <button id="share-client-submit" class="btn btn-primary" type="button">Delen</button>
+          </div>
+          <p id="share-client-error" class="error-text" role="alert"></p>
+        </div>
+
         <button id="delete-client-btn" class="btn-text-danger">Cliënt verwijderen…</button>
       </div>
       <ul id="notes-list" class="item-list"></ul>
@@ -160,6 +174,12 @@
       <div id="sync-configured-actions" hidden>
         <button id="sync-now-btn" class="btn btn-primary btn-large">Nu synchroniseren</button>
         <p id="sync-last-result" class="muted small"></p>
+
+        <div id="pending-shares-section" hidden>
+          <h2 class="section-title">Ontvangen uitnodigingen</h2>
+          <ul id="pending-shares-list" class="item-list"></ul>
+        </div>
+
         <button id="sync-signout-btn" class="btn-text-danger">Uitloggen op dit apparaat</button>
       </div>
 

@@ -9,7 +9,8 @@ import { startLiveTranscription, isTranscriptionSupported } from './transcriptio
 import { matchClientInTranscript } from './nameMatch.js';
 import { initAuth, lockNow, suspendAutoLock, resumeAutoLock } from './auth.js';
 import * as Sync from './sync.js';
-import { formatDuration, formatDateTime } from './utils.js';
+import * as Sharing from './sharing.js';
+import { formatDuration, formatDateTime, escapeHtml } from './utils.js';
 
 const state = {
   clients: [],
@@ -114,6 +115,9 @@ document.getElementById('add-client-form').addEventListener('submit', async (e) 
 const clientDetailNoteEl = document.getElementById('client-detail-note');
 const notesListEl = document.getElementById('notes-list');
 const notesListEmptyEl = document.getElementById('notes-list-empty');
+const clientSharedIndicatorEl = document.getElementById('client-shared-indicator');
+const shareClientBtn = document.getElementById('share-client-btn');
+const deleteClientBtn = document.getElementById('delete-client-btn');
 
 async function refreshNotes() {
   if (!state.currentClient) return;
@@ -124,6 +128,10 @@ async function refreshNotes() {
 function openClientDetail(client) {
   state.currentClient = client;
   clientDetailNoteEl.textContent = client.note || '';
+  clientSharedIndicatorEl.hidden = !client.shared;
+  shareClientBtn.hidden = !!client.shared; // v1: een cliënt met precies één collega delen
+  deleteClientBtn.textContent = client.shared ? 'Stop met delen (voor mij)…' : 'Cliënt verwijderen…';
+  document.getElementById('share-client-form').hidden = true;
   showView('clientDetail', { title: client.name, onBack: openClientList });
   refreshNotes();
 }
@@ -133,17 +141,74 @@ document.getElementById('new-note-fab').addEventListener('click', () => {
   openRecordView();
 });
 
-document.getElementById('delete-client-btn').addEventListener('click', async () => {
+deleteClientBtn.addEventListener('click', async () => {
   const client = state.currentClient;
   if (!client) return;
-  const ok = window.confirm(
-    `Cliënt "${client.name}" en al hun aantekeningen definitief verwijderen? Dit kan niet ongedaan gemaakt worden.`
-  );
-  if (!ok) return;
-  await Notes.deleteAllNotesForClient(client.id);
-  await Clients.deleteClient(client.id);
+
+  if (client.shared) {
+    const ok = window.confirm(
+      `Cliënt "${client.name}" wordt niet meer met jou gedeeld en verdwijnt uit jouw lijst. Je collega houdt gewoon toegang. Doorgaan?`
+    );
+    if (!ok) return;
+    try {
+      await Sharing.leaveSharedClient(client.id);
+    } catch (err) {
+      window.alert(err.message || 'Stoppen met delen is mislukt.');
+      return;
+    }
+  } else {
+    const ok = window.confirm(
+      `Cliënt "${client.name}" en al hun aantekeningen definitief verwijderen? Dit kan niet ongedaan gemaakt worden.`
+    );
+    if (!ok) return;
+    await Notes.deleteAllNotesForClient(client.id);
+    await Clients.deleteClient(client.id);
+  }
   state.currentClient = null;
   openClientList();
+});
+
+// ---------------------------------------------------------------------
+// Cliënt delen met een collega
+// ---------------------------------------------------------------------
+
+const shareClientFormEl = document.getElementById('share-client-form');
+const shareClientEmailEl = document.getElementById('share-client-email');
+const shareClientErrorEl = document.getElementById('share-client-error');
+const shareClientSubmitBtn = document.getElementById('share-client-submit');
+
+shareClientBtn.addEventListener('click', () => {
+  shareClientEmailEl.value = '';
+  shareClientErrorEl.textContent = '';
+  shareClientFormEl.hidden = false;
+  setTimeout(() => shareClientEmailEl.focus(), 50);
+});
+
+document.getElementById('share-client-cancel').addEventListener('click', () => {
+  shareClientFormEl.hidden = true;
+});
+
+shareClientSubmitBtn.addEventListener('click', async () => {
+  const client = state.currentClient;
+  const email = shareClientEmailEl.value.trim();
+  shareClientErrorEl.textContent = '';
+  if (!client) return;
+  if (!email) {
+    shareClientErrorEl.textContent = 'Vul het e-mailadres van je collega in.';
+    return;
+  }
+  shareClientSubmitBtn.disabled = true;
+  try {
+    await Sharing.shareClient(client.id, email);
+    shareClientFormEl.hidden = true;
+    await trySync();
+    openClientDetail({ ...client, shared: true });
+  } catch (err) {
+    console.warn('Delen mislukt:', err);
+    shareClientErrorEl.textContent = err.message || 'Delen is mislukt.';
+  } finally {
+    shareClientSubmitBtn.disabled = false;
+  }
 });
 
 // ---------------------------------------------------------------------
@@ -431,11 +496,60 @@ async function refreshSyncView() {
     syncConfiguredActionsEl.hidden = false;
     syncSetupFormEl.hidden = true;
     setSyncIndicator('idle');
+    await refreshPendingShares();
   } else {
     syncStatusEl.textContent = 'Synchronisatie is nog niet ingesteld. Dit apparaat werkt gewoon lokaal door.';
     syncConfiguredActionsEl.hidden = true;
     syncSetupFormEl.hidden = false;
     setSyncIndicator('off');
+  }
+}
+
+// ---------------------------------------------------------------------
+// Ontvangen deel-uitnodigingen (zie sharing.js)
+// ---------------------------------------------------------------------
+
+const pendingSharesSectionEl = document.getElementById('pending-shares-section');
+const pendingSharesListEl = document.getElementById('pending-shares-list');
+
+async function refreshPendingShares() {
+  let shares = [];
+  try {
+    shares = await Sharing.getPendingShares();
+  } catch (err) {
+    console.warn('Ophalen van uitnodigingen mislukt:', err);
+  }
+  pendingSharesSectionEl.hidden = shares.length === 0;
+  pendingSharesListEl.innerHTML = '';
+  for (const share of shares) {
+    const li = document.createElement('li');
+    li.className = 'pending-share-item';
+    li.innerHTML = `
+      <span class="item-title">${escapeHtml(share.previewName)}</span>
+      <span class="item-sub">Gedeeld door ${escapeHtml(share.fromEmail)}</span>
+      <div class="pending-share-actions">
+        <button class="btn btn-secondary" data-action="decline">Afwijzen</button>
+        <button class="btn btn-primary" data-action="accept">Accepteren</button>
+      </div>
+    `;
+    li.querySelector('[data-action="accept"]').addEventListener('click', async () => {
+      try {
+        await Sharing.acceptShare(share.shareId);
+        await trySync();
+        await refreshSyncView();
+      } catch (err) {
+        window.alert(err.message || 'Accepteren is mislukt.');
+      }
+    });
+    li.querySelector('[data-action="decline"]').addEventListener('click', async () => {
+      try {
+        await Sharing.declineShare(share.shareId);
+        await refreshPendingShares();
+      } catch (err) {
+        window.alert(err.message || 'Afwijzen is mislukt.');
+      }
+    });
+    pendingSharesListEl.appendChild(li);
   }
 }
 

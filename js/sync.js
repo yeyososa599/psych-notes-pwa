@@ -1,11 +1,13 @@
 // ==========================================================================
 // sync.js — SYNCHRONISATIE TUSSEN APPARATEN (aparte, afgebakende module)
 //
-// Dit is de ENIGE module die over het netwerk praat. Alle andere modules
-// (db.js, crypto.js, clients.js, notes.js, auth.js) werken volledig lokaal
-// en blijven werken als deze module nooit wordt aangeroepen — sync is dus
-// nooit een vereiste voor het lokaal inspreken/bekijken van aantekeningen,
-// alleen voor het delen ervan tussen telefoon en computer.
+// Dit is de ENIGE module die over het netwerk praat, samen met sharing.js
+// (delen met een collega — zie dat bestand voor het cross-account-verhaal).
+// Alle andere modules (db.js, crypto.js, clients.js, notes.js, auth.js)
+// werken volledig lokaal en blijven werken als deze module nooit wordt
+// aangeroepen — sync is dus nooit een vereiste om lokaal in te spreken of
+// aantekeningen te bekijken, alleen om ze tussen telefoon en computer van
+// DEZELFDE psycholoog te delen.
 //
 // WAT VERLAAT HET APPARAAT via deze module:
 //   - Bij registratie/login: e-mailadres + een AFGELEID "inlogbewijs"
@@ -28,69 +30,14 @@ import { db } from './db.js';
 import * as Crypto from './crypto.js';
 import * as Clients from './clients.js';
 import * as Notes from './notes.js';
+import * as Sharing from './sharing.js';
+import {
+  bytesToBase64, base64ToBytes, apiCall,
+  serializeEnc, deserializeEnc, serializeClientRecord, deserializeClientRecord,
+  serializeNoteRecord, deserializeNoteRecord,
+} from './utils.js';
 
 const META_KEY = 'syncAccount';
-
-// --------------------------------------------------------------------
-// Base64-helpers (chunked, zodat ook grote audio-Blobs geen stack-
-// overflow veroorzaken bij het coderen).
-// --------------------------------------------------------------------
-
-function bytesToBase64(bytes) {
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
-}
-
-function base64ToBytes(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function serializeEnc(enc) {
-  if (!enc) return null;
-  return { iv: bytesToBase64(enc.iv), data: bytesToBase64(enc.data), ...(enc.mimeType ? { mimeType: enc.mimeType } : {}) };
-}
-
-function deserializeEnc(enc) {
-  if (!enc) return null;
-  return { iv: base64ToBytes(enc.iv), data: base64ToBytes(enc.data), ...(enc.mimeType ? { mimeType: enc.mimeType } : {}) };
-}
-
-function serializeClientRecord(r) {
-  if (r.deleted) return { id: r.id, deleted: true, createdAt: r.createdAt, updatedAt: r.updatedAt };
-  return {
-    id: r.id, deleted: false, createdAt: r.createdAt, updatedAt: r.updatedAt,
-    encName: serializeEnc(r.encName), encNote: serializeEnc(r.encNote),
-  };
-}
-function deserializeClientRecord(r) {
-  if (r.deleted) return { id: r.id, deleted: true, createdAt: r.createdAt, updatedAt: r.updatedAt };
-  return {
-    id: r.id, deleted: false, createdAt: r.createdAt, updatedAt: r.updatedAt,
-    encName: deserializeEnc(r.encName), encNote: deserializeEnc(r.encNote),
-  };
-}
-
-function serializeNoteRecord(r) {
-  if (r.deleted) return { id: r.id, clientId: r.clientId, deleted: true, createdAt: r.createdAt, updatedAt: r.updatedAt };
-  return {
-    id: r.id, clientId: r.clientId, deleted: false, createdAt: r.createdAt, updatedAt: r.updatedAt,
-    durationSec: r.durationSec, encTranscript: serializeEnc(r.encTranscript), encAudio: serializeEnc(r.encAudio),
-  };
-}
-function deserializeNoteRecord(r) {
-  if (r.deleted) return { id: r.id, clientId: r.clientId, deleted: true, createdAt: r.createdAt, updatedAt: r.updatedAt };
-  return {
-    id: r.id, clientId: r.clientId, deleted: false, createdAt: r.createdAt, updatedAt: r.updatedAt,
-    durationSec: r.durationSec, encTranscript: deserializeEnc(r.encTranscript), encAudio: deserializeEnc(r.encAudio),
-  };
-}
 
 // --------------------------------------------------------------------
 // Account-status (lokaal opgeslagen in IndexedDB meta-store; bevat GEEN
@@ -118,20 +65,6 @@ export async function signOut() {
 // Registratie / login
 // --------------------------------------------------------------------
 
-async function apiCall(serverUrl, path, { method = 'GET', body, token } = {}) {
-  const res = await fetch(serverUrl.replace(/\/$/, '') + path, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Serverfout (${res.status})`);
-  return data;
-}
-
 /** Nieuw sync-account aanmaken. Vereist dat de app al lokaal ontgrendeld is. */
 export async function registerAccount(serverUrl, email, password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -151,6 +84,7 @@ export async function registerAccount(serverUrl, email, password) {
   });
 
   await saveAccountState({ serverUrl, email, sessionToken, encSalt: salt, iterations, lastSyncAt: null });
+  await Sharing.ensureKeypairSynced();
 }
 
 /**
@@ -172,6 +106,7 @@ export async function loginAccount(serverUrl, email, password) {
 
   await Crypto.unwrapDekWithPassword(deserializeEnc(wrappedDek), password, salt, iterations);
   await saveAccountState({ serverUrl, email, sessionToken, encSalt: salt, iterations, lastSyncAt: null });
+  await Sharing.ensureKeypairSynced();
 }
 
 // --------------------------------------------------------------------
@@ -186,6 +121,8 @@ export async function loginAccount(serverUrl, email, password) {
 export async function syncNow() {
   const account = await getAccountState();
   if (!account) throw new Error('Sync is niet ingesteld.');
+
+  await Sharing.ensureKeypairSynced(); // self-healing: publiceert alsnog als dat eerder niet lukte
 
   const [rawClients, rawNotes] = await Promise.all([
     Clients.getAllClientsRaw(),
@@ -206,6 +143,15 @@ export async function syncNow() {
   const pulled = await apiCall(account.serverUrl, `/api/sync/pull?since=${encodeURIComponent(since || '')}`, {
     token: account.sessionToken,
   });
+
+  // Sleutels van gedeelde cliënten eerst opslaan, vóórdat de bijbehorende
+  // (gedeelde) records ontsleuteld/weggeschreven worden — anders zou
+  // Clients.putRawClientRecords niets fout doen (het schrijft alleen
+  // ciphertext weg), maar zou een latere decrypt-poging in de UI stuklopen
+  // omdat getKeyForClient de sleutel nog niet kent.
+  for (const grant of pulled.sharedKeys || []) {
+    await Crypto.storeSharedClientKey(grant.clientId, base64ToBytes(grant.wrappedKey));
+  }
 
   await Clients.putRawClientRecords(pulled.clients.map(deserializeClientRecord));
   await Notes.putRawNoteRecords(pulled.notes.map(deserializeNoteRecord));
