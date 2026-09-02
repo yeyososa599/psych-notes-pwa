@@ -35,16 +35,24 @@ import { fileURLToPath } from 'node:url';
 // BELANGRIJK — schijfopslag op de meeste hostingplatforms (o.a. Render,
 // zowel de gratis als de standaard betaalde laag zónder expliciet
 // toegevoegde "Persistent Disk") is NIET blijvend: bij een herstart van de
-// server (bijv. na inactiviteit, of bij elke nieuwe deploy) begint het
-// bestandssysteem gewoon opnieuw, en is data/db.json gewoon weer leeg —
-// alle accounts en gesynchroniseerde data lijken dan "verdwenen".
+// server (bijv. na inactiviteit, of — vaker — bij elke nieuwe deploy)
+// begint het bestandssysteem gewoon opnieuw, en is data/db.json gewoon
+// weer leeg — alle accounts en gesynchroniseerde data lijken dan
+// "verdwenen".
 //
-// Zet daarom in productie de omgevingsvariabele DATA_DIR op het pad van
-// een echte persistente schijf (bij Render: koppel een "Persistent Disk"
-// aan de service en gebruik het mountpad, bijv. "/data"). Zonder die
-// variabele valt dit terug op een map naast dit bestand — prima voor
-// lokaal ontwikkelen/testen, NIET voor productiegebruik op een platform
-// zonder persistente schijf.
+// Drie manieren om dit op te lossen, van geen kosten tot betaald:
+//   1. UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN instellen — een
+//      gratis, blijvende cloud-opslag (upstash.com, geen creditcard
+//      nodig, werkt ook op Render's gratis laag omdat het geen eigen
+//      schijf nodig heeft). Zie server/README.md voor de setup.
+//   2. DATA_DIR instellen op een echte persistente schijf (bijv. een
+//      Render "Persistent Disk", alleen op betaalde plannen).
+//   3. Geen van beide: lokaal bestand naast dit script — prima voor
+//      ontwikkelen/testen, NIET blijvend zodra de server herstart.
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const UPSTASH_KEY = 'praktijknotities-db';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
@@ -60,8 +68,43 @@ function emptyDb() {
 let cache = null;
 let writeQueue = Promise.resolve();
 
+// Upstash's REST API: elk commando is gewoon een HTTP-aanroep, dus geen
+// extra npm-dependency nodig (fetch zit al in Node) en geen aparte
+// TCP-verbinding om open te houden — ideaal voor een klein server-proces
+// dat toch al maar af en toe iets hoeft te lezen/schrijven.
+async function upstashGet() {
+  const res = await fetch(`${UPSTASH_URL}/get/${UPSTASH_KEY}`, {
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+  });
+  if (!res.ok) throw new Error(`Upstash GET mislukt (${res.status})`);
+  const data = await res.json();
+  return data.result; // string (JSON) of null als er nog niets staat
+}
+
+async function upstashSet(jsonString) {
+  const res = await fetch(`${UPSTASH_URL}/set/${UPSTASH_KEY}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+    body: jsonString,
+  });
+  if (!res.ok) throw new Error(`Upstash SET mislukt (${res.status})`);
+}
+
 async function load() {
   if (cache) return cache;
+
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    try {
+      const raw = await upstashGet();
+      cache = raw ? { ...emptyDb(), ...JSON.parse(raw) } : emptyDb();
+      return cache;
+    } catch (err) {
+      console.warn('Upstash niet bereikbaar, val terug op een lege database voor deze sessie:', err);
+      cache = emptyDb();
+      return cache;
+    }
+  }
+
   try {
     const raw = await readFile(DATA_FILE, 'utf8');
     cache = { ...emptyDb(), ...JSON.parse(raw) }; // vult ontbrekende nieuwe velden aan voor bestaande data.json's
@@ -72,6 +115,10 @@ async function load() {
 }
 
 async function persist() {
+  if (UPSTASH_URL && UPSTASH_TOKEN) {
+    await upstashSet(JSON.stringify(cache));
+    return;
+  }
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(DATA_FILE, JSON.stringify(cache, null, 2), 'utf8');
 }

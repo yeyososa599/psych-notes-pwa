@@ -39,14 +39,34 @@ moet maken — dit valt buiten wat code kan regelen:
    een nieuwe deploy) begint het bestandssysteem leeg — dan lijken alle
    accounts en gesynchroniseerde data ineens verdwenen ("onbekend
    account" bij inloggen, terwijl het account eerder wél werkte).
-   - **Snelle fix (Render):** voeg in de dashboard van je service een
-     **Disk** toe (tabblad "Disks" → "Add Disk", bijv. 1GB, mount path
-     `/data`) en zet de omgevingsvariabele `DATA_DIR=/data`. Herstart de
-     service — vanaf nu overleeft `data/db.json` een herstart.
-   - **Beter voor echt productiegebruik:** vervang `store.js` alsnog door
-     een echte database (bijv. PostgreSQL) met back-ups — de
-     functie-namen in `store.js` vormen het contract dat je moet
-     naboetsen.
+
+   Oplossingen, van gratis naar betaald:
+
+   - **Upstash Redis (gratis, werkt ook op Render's gratis laag).**
+     `store.js` kan een gratis Upstash-database gebruiken in plaats van
+     het lokale bestand — dat overleeft herstarts zonder dat je een
+     betaalde schijf nodig hebt.
+     1. Ga naar **upstash.com** → maak een gratis account (geen
+        creditcard nodig).
+     2. **Create Database** → kies een naam en een regio dicht bij je
+        server (bijv. Frankfurt/EU) → **Create**.
+     3. Op de detailpagina van die database, onder **REST API**: kopieer
+        de **UPSTASH_REDIS_REST_URL** en **UPSTASH_REDIS_REST_TOKEN**.
+     4. Zet die twee als omgevingsvariabelen op je hostingpartij (bij
+        Render: tabblad **Environment** → **Add Environment Variable**,
+        één per stuk).
+     5. Herstart de service. `store.js` gebruikt Upstash automatisch
+        zodra beide variabelen aanwezig zijn — zonder deze variabelen
+        valt alles terug op het lokale bestand, dus dit breekt niets als
+        je 'm (nog) niet instelt.
+   - **Persistente schijf (alleen op betaalde hostingplannen).** Zet
+     `DATA_DIR` op het mountpad van een echte schijf (bij Render: voeg
+     een "Disk" toe aan de service, alleen beschikbaar op betaalde
+     plannen).
+   - **Beter voor echt productiegebruik op grotere schaal:** vervang
+     `store.js` alsnog door een echte database (bijv. PostgreSQL) met
+     back-ups — de functie-namen in `store.js` vormen het contract dat
+     je moet naboetsen.
 5. **Rate limiting op `/api/login`.** Deze referentie-server heeft geen
    bescherming tegen het herhaaldelijk raden van wachtwoorden. Voeg dit
    toe (bijv. `express-rate-limit`) vóór productiegebruik.
